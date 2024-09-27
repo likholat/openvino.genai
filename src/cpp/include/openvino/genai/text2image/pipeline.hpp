@@ -53,7 +53,8 @@ public:
             AUTO,
             LCM,
             LMS_DISCRETE,
-            DDIM
+            DDIM,
+            EULER_DISCRETE
         };
 
         static std::shared_ptr<Scheduler> from_config(const std::string& scheduler_config_path,
@@ -98,10 +99,11 @@ public:
 
     // creates either LCM or SD pipeline from building blocks
     static Text2ImagePipeline stable_diffusion(
-        const std::shared_ptr<Scheduler>& scheduler_type,
-        const CLIPTextModel& clip_text_model,
-        const UNet2DConditionModel& unet,
-        const AutoencoderKL& vae_decoder);
+        const std::shared_ptr<Scheduler>& scheduler_type, // scheduler
+        const CLIPTextModel& clip_text_model,             // text_encoder
+        const UNet2DConditionModel& unet,                 // unet
+        const AutoencoderKL& vae_decoder);                // vae
+
 
     // creates either LCM or SD pipeline from building blocks
     static Text2ImagePipeline latent_consistency_model(
@@ -109,6 +111,14 @@ public:
         const CLIPTextModel& clip_text_model,
         const UNet2DConditionModel& unet,
         const AutoencoderKL& vae_decoder);
+
+    // creates either SDXL pipeline from building blocks
+    static Text2ImagePipeline stable_diffusion_xl(
+        const std::shared_ptr<Scheduler>& scheduler_type, // - TODO: new scheduler
+        const CLIPTextModel& clip_text_model,             // text_encoder
+        const CLIPTextModel& clip_text_model_with_projection, // - TODO: new encoder, text_encoder 2
+        const UNet2DConditionModel& unet,                 // unet 
+        const AutoencoderKL& vae_decoder);                // vae
 
     GenerationConfig get_generation_config() const;
     void set_generation_config(const GenerationConfig& generation_config);
