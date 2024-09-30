@@ -81,24 +81,34 @@ EulerDiscreteScheduler::EulerDiscreteScheduler(const Config& scheduler_config)
         m_alphas_cumprod.back() = std::pow(2, -24);
     }
 
+    // sigmas = (((1 - self.alphas_cumprod) / self.alphas_cumprod) ** 0.5).flip(0)
     for (auto it = m_alphas_cumprod.rbegin(); it != m_alphas_cumprod.rend(); ++it) {
         float sigma = std::pow((1 - (*it) / (*it)), 0.5);
         m_sigmas.push_back(sigma);
     }
 
-    // auto linspaced = linspace<float>(0.0f, end, num_inference_steps, true);
-    // for (auto it = linspaced.rbegin(); it != linspaced.rend(); ++it) {
-    //     m_timesteps.push_back(static_cast<int64_t>(std::round(*it)));
+    auto linspaced = linspace<float>(0.0f, static_cast<float>(m_config.num_train_timesteps - 1), m_config.num_train_timesteps, true);
+    for (auto it = linspaced.rbegin(); it != linspaced.rend(); ++it) {
+                m_timesteps.push_back(static_cast<int64_t>(std::round(*it)));
+    }
+
+
+    OPENVINO_ASSERT(m_config.timestep_type != TimestepType::CONTINUOUS && m_config.prediction_type != PredictionType::V_PREDICTION,
+                    "This case isn't supported: `timestep_type=continuous` and `prediction_type=v_prediction`. Please, add support.");
+
+    // TODO:
+    // if (m_config.timestep_type == TimestepType::CONTINUOUS && m_config.prediction_type == PredictionType::V_PREDICTION) {
+    //     for (size_t i = 0; i < m_timesteps.size(); ++i) {
+    //         m_timesteps[i] = 0.25f * std::log(m_sigmas[i]);
+    //     }
     // }
 
-    // sigmas = (((1 - self.alphas_cumprod) / self.alphas_cumprod) ** 0.5).flip(0)
-    // timesteps = np.linspace(0, num_train_timesteps - 1, num_train_timesteps, dtype=float)[::-1].copy()
-
-
+    // torch.cat([sigmas, torch.zeros(1, device=sigmas.device)])
+    m_sigmas.push_back(0);
 }
 
 void EulerDiscreteScheduler::set_timesteps(size_t num_inference_steps) {
-    // m_timesteps.clear();
+    m_timesteps.clear();
 
     OPENVINO_ASSERT(num_inference_steps <= m_config.num_train_timesteps,
                     "`num_inference_steps` cannot be larger than `m_config.num_train_timesteps`");
@@ -116,6 +126,7 @@ std::map<std::string, ov::Tensor> EulerDiscreteScheduler::step(ov::Tensor noise_
 }
 
 std::vector<int64_t> EulerDiscreteScheduler::get_timesteps() const {
+
     return m_timesteps;
 }
 
@@ -124,7 +135,14 @@ float EulerDiscreteScheduler::get_init_noise_sigma() const {
 }
 
 void EulerDiscreteScheduler::scale_model_input(ov::Tensor sample, size_t inference_step) {
-    return;
+    if(m_step_index == -1)
+        m_step_index = 0;
+
+    float sigma = m_sigmas[m_step_index];
+    float* sample_data = sample.data<float>();
+    for (size_t i = 0; i < sample.get_size(); i++) {
+        sample_data[i] /= std::pow((std::pow(sigma, 2) + 1), 0.5);
+    }
 }
 
 } // namespace genai

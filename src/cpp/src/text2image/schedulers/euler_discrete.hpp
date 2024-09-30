@@ -49,9 +49,11 @@ public:
 private:
     Config m_config;
 
-    std::vector<float> m_alphas_cumprod;
-    std::vector<int64_t> m_timesteps;
-    std::vector<float> m_sigmas,
+    std::vector<float> m_alphas_cumprod, m_sigmas;
+    std::vector<size_t> m_timesteps;
+
+    size_t m_step_index = -1;
+
 };
 
 } // namespace genai
