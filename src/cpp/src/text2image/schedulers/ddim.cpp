@@ -158,7 +158,7 @@ std::map<std::string, ov::Tensor> DDIMScheduler::step(ov::Tensor noise_pred, ov:
                 break;
             default:
                 OPENVINO_THROW("Unsupported value for 'PredictionType'");
-            }
+        }
     }
 
     // TODO: support m_config.thresholding

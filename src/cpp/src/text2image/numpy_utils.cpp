@@ -1,4 +1,5 @@
 #include "text2image/numpy_utils.hpp"
+#include "openvino/core/except.hpp"
 
 void rescale_zero_terminal_snr(std::vector<float>& betas) {
     // Convert betas to alphas_bar_sqrt
@@ -38,4 +39,33 @@ void rescale_zero_terminal_snr(std::vector<float>& betas) {
     std::transform(alphas.begin(), alphas.end(), betas.begin(), [](float x) {
         return (1 - x);
     });
+}
+
+std::vector<float> interp(const std::vector<std::int64_t>& x, const std::vector<size_t>& xp, const std::vector<float>& fp) {
+    OPENVINO_ASSERT(xp.size() == fp.size(), "`xp` and `fp`vectors must have the same sizes");
+
+    std::vector<float> interp_res;
+
+    for (const auto& i : x) {
+        if (i <= xp[0]) {
+            interp_res.push_back(fp[0]);
+        } else if (i >= xp[xp.size() - 1]) {
+            interp_res.push_back(fp[fp.size() - 1]);
+        } else {
+            // find the first xp element that is not less than x[i]
+            auto it = std::lower_bound(xp.begin(), xp.end(), i);
+
+            // idx of the left boundary
+            size_t idx = std::distance(xp.begin(), it) - 1;
+
+            float x0 = xp[idx], x1 = xp[idx + 1];
+            float y0 = fp[idx], y1 = fp[idx + 1];
+    
+            float interp_val = (y1 - y0) / (x1 - x0) * (i - x0) + y0;
+
+            interp_res.push_back(interp_val);
+        }
+    }
+
+    return interp_res;
 }
