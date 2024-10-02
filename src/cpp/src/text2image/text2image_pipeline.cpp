@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "text2image/stable_diffusion_pipeline.hpp"
+#include "text2image/stable_diffusion_xl_pipeline.hpp"
 
 #include <ctime>
 #include <cstdlib>

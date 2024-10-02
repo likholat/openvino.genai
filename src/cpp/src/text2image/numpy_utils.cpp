@@ -1,6 +1,10 @@
 #include "text2image/numpy_utils.hpp"
 #include "openvino/core/except.hpp"
 
+namespace ov {
+namespace genai {
+namespace numpy_utils {
+
 void rescale_zero_terminal_snr(std::vector<float>& betas) {
     // Convert betas to alphas_bar_sqrt
     std::vector<float> alphas, alphas_bar_sqrt;
@@ -52,7 +56,7 @@ std::vector<float> interp(const std::vector<std::int64_t>& x, const std::vector<
         } else if (i >= xp[xp.size() - 1]) {
             interp_res.push_back(fp[fp.size() - 1]);
         } else {
-            // find the first xp element that is not less than x[i]
+            // Find the first xp element that is not less than x[i]
             auto it = std::lower_bound(xp.begin(), xp.end(), i);
 
             // idx of the left boundary
@@ -69,3 +73,7 @@ std::vector<float> interp(const std::vector<std::int64_t>& x, const std::vector<
 
     return interp_res;
 }
+
+}// namespace ov
+}// namespace genai
+}// namespace txt2img_utils

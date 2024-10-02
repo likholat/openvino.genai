@@ -148,6 +148,7 @@ private:
     explicit Text2ImagePipeline(const std::shared_ptr<DiffusionPipeline>& impl);
 
     class StableDiffusionPipeline;
+    class StableDiffusionXLPipeline;
 };
 
 //
