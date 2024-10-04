@@ -14,6 +14,7 @@
 #include "openvino/genai/visibility.hpp"
 
 #include "openvino/genai/text2image/clip_text_model.hpp"
+#include "openvino/genai/text2image/clip_text_model_with_projection.hpp"
 #include "openvino/genai/text2image/unet2d_condition_model.hpp"
 #include "openvino/genai/text2image/autoencoder_kl.hpp"
 
@@ -114,11 +115,11 @@ public:
 
     // creates either SDXL pipeline from building blocks
     static Text2ImagePipeline stable_diffusion_xl(
-        const std::shared_ptr<Scheduler>& scheduler_type, // - TODO: new scheduler
-        const CLIPTextModel& clip_text_model,             // text_encoder
-        const CLIPTextModel& clip_text_model_with_projection, // - TODO: new encoder, text_encoder 2
-        const UNet2DConditionModel& unet,                 // unet 
-        const AutoencoderKL& vae_decoder);                // vae
+        const std::shared_ptr<Scheduler>& scheduler_type,
+        const CLIPTextModel& clip_text_model,
+        const CLIPTextModelWithProjection& clip_text_model_with_projection,
+        const UNet2DConditionModel& unet,
+        const AutoencoderKL& vae_decoder);
 
     GenerationConfig get_generation_config() const;
     void set_generation_config(const GenerationConfig& generation_config);

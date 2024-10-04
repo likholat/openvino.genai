@@ -73,9 +73,10 @@ Text2ImagePipeline::Text2ImagePipeline(const std::string& root_dir, const std::s
     const std::string class_name = get_class_name(root_dir);
 
     if (class_name == "StableDiffusionPipeline" || 
-        class_name == "LatentConsistencyModelPipeline" ||
-        class_name == "StableDiffusionXLPipeline") {
+        class_name == "LatentConsistencyModelPipeline") {
         m_impl = std::make_shared<StableDiffusionPipeline>(root_dir, device, properties);
+    } else if (class_name == "StableDiffusionXLPipeline") {
+        m_impl = std::make_shared<StableDiffusionXLPipeline>(root_dir, device, properties);
     } else {
         OPENVINO_THROW("Unsupported text to image generation pipeline '", class_name, "'");
     }
@@ -110,10 +111,9 @@ Text2ImagePipeline Text2ImagePipeline::latent_consistency_model(
 Text2ImagePipeline Text2ImagePipeline::stable_diffusion_xl(
     const std::shared_ptr<Scheduler>& scheduler,
         const CLIPTextModel& clip_text_model,
-        const CLIPTextModel& clip_text_model_with_projection,
+        const CLIPTextModelWithProjection& clip_text_model_with_projection,
         const UNet2DConditionModel& unet,
         const AutoencoderKL& vae_decoder) {
-
     auto impl = std::make_shared<StableDiffusionXLPipeline>(clip_text_model, clip_text_model_with_projection, unet, vae_decoder);
 
     assert(scheduler != nullptr);
