@@ -56,7 +56,8 @@ public:
             LCM,
             LMS_DISCRETE,
             DDIM,
-            EULER_DISCRETE
+            EULER_DISCRETE,
+            FLOW_MATCH_EULER_DISCRETE
         };
 
         static std::shared_ptr<Scheduler> from_config(const std::string& scheduler_config_path,
