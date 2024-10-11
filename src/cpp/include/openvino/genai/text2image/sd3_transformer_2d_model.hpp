@@ -1,0 +1,77 @@
+// Copyright (C) 2023-2024 Intel Corporation
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include <string>
+
+#include "openvino/genai/visibility.hpp"
+// #include "openvino/genai/tokenizer.hpp"
+
+#include "openvino/core/any.hpp"
+#include "openvino/runtime/tensor.hpp"
+#include "openvino/runtime/infer_request.hpp"
+#include "openvino/runtime/properties.hpp"
+
+
+namespace ov {
+namespace genai {
+
+class OPENVINO_GENAI_EXPORTS SD3Transformer2DModel {
+public:
+    struct Config {
+        size_t sample_size = 128;
+        size_t patch_size = 2;
+        size_t in_channels = 16;
+        size_t num_layers = 18;
+        size_t attention_head_dim = 64;
+        size_t num_attention_heads = 18;
+        size_t joint_attention_dim = 4096;
+        size_t caption_projection_dim = 1152;
+        size_t pooled_projection_dim = 2048;
+        size_t out_channels = 16;
+        size_t pos_embed_max_size = 96;
+
+        explicit Config(const std::string& config_path);
+    };
+
+    explicit SD3Transformer2DModel(const std::string root_dir);
+
+    SD3Transformer2DModel(const std::string& root_dir,
+                  const std::string& device,
+                  const ov::AnyMap& properties = {});
+
+    template <typename... Properties,
+              typename std::enable_if<ov::util::StringAny<Properties...>::value, bool>::type = true>
+    SD3Transformer2DModel(const std::string& root_dir,
+                  const std::string& device,
+                  Properties&&... properties)
+        : SD3Transformer2DModel(root_dir, device, ov::AnyMap{std::forward<Properties>(properties)...}) { }
+
+    SD3Transformer2DModel(const CLIPTextModelWithProjection&);
+
+    const Config& get_config() const;
+
+    // SD3Transformer2DModel& reshape(int batch_size);
+
+    SD3Transformer2DModel& compile(const std::string& device, const ov::AnyMap& properties = {});
+
+    template <typename... Properties>
+    ov::util::EnableIfAllStringAny<CLIPTextModelWithProjection&, Properties...> compile(
+            const std::string& device,
+            Properties&&... properties) {
+        return compile(device, ov::AnyMap{std::forward<Properties>(properties)...});
+    }
+
+    ov::Tensor infer();
+
+private:
+    Config m_config;
+    ov::InferRequest m_request;
+    std::shared_ptr<ov::Model> m_model;
+
+    // Tokenizer m_clip_tokenizer;
+};
+
+} // namespace genai
+} // namespace ov
