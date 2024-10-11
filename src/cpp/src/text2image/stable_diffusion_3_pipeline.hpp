@@ -37,6 +37,15 @@ public:
             OPENVINO_THROW("Unsupported '", text_encoder, "' text encoder type");
         }
 
+        // TODO:
+        // const std::string text_encoder_3 = data["text_encoder_3"][1].get<std::string>();
+        // if (text_encoder_2 == "T5EncoderModel") {
+        //     m_clip_text_encoder_with_projection = std::make_shared<T5EncoderModel>(root_dir + "/text_encoder_3");
+        // } else {
+        //     OPENVINO_THROW("Unsupported '", text_encoder, "' text encoder type");
+        // }
+
+
         const std::string unet = data["unet"][1].get<std::string>();
         if (unet == "UNet2DConditionModel") {
             m_unet = std::make_shared<UNet2DConditionModel>(root_dir + "/unet");
@@ -49,6 +58,13 @@ public:
             m_vae_decoder = std::make_shared<AutoencoderKL>(root_dir + "/vae_decoder");
         } else {
             OPENVINO_THROW("Unsupported '", vae, "' VAE decoder type");
+        }
+
+        const std::string transformer = data["transformer"][1].get<std::string>();
+        if (vae == "SD3Transformer2DModel") {
+            m_transformer = std::make_shared<SD3Transformer2DModel>(root_dir + "/transformer");
+        } else {
+            OPENVINO_THROW("Unsupported '", transformer, "'Transformer type");
         }
 
         // initialize generation config
@@ -79,6 +95,8 @@ public:
             OPENVINO_THROW("Unsupported '", text_encoder, "' text encoder type");
         }
 
+        // TODO: text_encoder_3
+
         const std::string unet = data["unet"][1].get<std::string>();
         if (unet == "UNet2DConditionModel") {
             m_unet = std::make_shared<UNet2DConditionModel>(root_dir + "/unet", device, properties);
@@ -93,6 +111,13 @@ public:
             OPENVINO_THROW("Unsupported '", vae, "' VAE decoder type");
         }
 
+        const std::string transformer = data["transformer"][1].get<std::string>();
+        if (vae == "SD3Transformer2DModel") {
+            m_transformer = std::make_shared<SD3Transformer2DModel>(root_dir + "/transformer");
+        } else {
+            OPENVINO_THROW("Unsupported '", transformer, "'Transformer type");
+        }
+
         // initialize generation config
         initialize_generation_config(data["_class_name"].get<std::string>());
     }
@@ -101,11 +126,13 @@ public:
         const CLIPTextModel& clip_text_model,
         const CLIPTextModelWithProjection& clip_text_model_with_projection,
         const UNet2DConditionModel& unet,
-        const AutoencoderKL& vae_decoder)
+        const AutoencoderKL& vae_decoder,
+        const SD3Transformer2DModel& transformer)
         : m_clip_text_encoder(std::make_shared<CLIPTextModel>(clip_text_model)),
           m_clip_text_encoder_with_projection(std::make_shared<CLIPTextModelWithProjection>(clip_text_model_with_projection)),
           m_unet(std::make_shared<UNet2DConditionModel>(unet)),
-          m_vae_decoder(std::make_shared<AutoencoderKL>(vae_decoder)) { }
+          m_vae_decoder(std::make_shared<AutoencoderKL>(vae_decoder)),
+          m_transformer(std::make_shared<SD3Transformer2DModel>(transformer)) { }
 
     void reshape(const int num_images_per_prompt, const int height, const int width, const float guidance_scale) override {
         check_inputs(height, width);
@@ -115,6 +142,7 @@ public:
         m_clip_text_encoder_with_projection->reshape(batch_size_multiplier);
         m_unet->reshape(num_images_per_prompt * batch_size_multiplier, height, width, m_clip_text_encoder->get_config().max_position_embeddings);
         m_vae_decoder->reshape(num_images_per_prompt, height, width);
+        // TODO: transformer reshape
     }
 
     void compile(const std::string& device, const ov::AnyMap& properties) override {
@@ -122,15 +150,13 @@ public:
         m_clip_text_encoder_with_projection->compile(device, properties);
         m_unet->compile(device, properties);
         m_vae_decoder->compile(device, properties);
+        m_transformer->compile(device, properties);
     }
 
     ov::Tensor generate(const std::string& positive_prompt,
                         const ov::AnyMap& properties) override {
         GenerationConfig generation_config = m_generation_config;
         generation_config.update_generation_config(properties);
-
-        // Stable Diffusion pipeline
-        // see https://huggingface.co/docs/diffusers/using-diffusers/write_own_pipeline#deconstruct-the-stable-diffusion-pipeline
 
         const auto& unet_config = m_unet->get_config();
         const size_t batch_size_multiplier = do_classifier_free_guidance(generation_config.guidance_scale) ? 2 : 1;  // Unet accepts 2x batch in case of CFG
@@ -147,20 +173,7 @@ public:
             generation_config.random_generator = std::make_shared<CppStdGenerator>(seed);
         }
 
-        std::vector<float> time_ids = {static_cast<float>(generation_config.width), 
-                                       static_cast<float>(generation_config.height),
-                                       0,
-                                       0, 
-                                       static_cast<float>(generation_config.width), 
-                                       static_cast<float>(generation_config.height),
-                                       };
-        ov::Tensor add_time_ids(ov::element::f32, {batch_size_multiplier, time_ids.size()});
-        float* add_time_ids_data = add_time_ids.data<float>();
-        std::copy(time_ids.begin(), time_ids.end(), add_time_ids_data);
-
-        if (batch_size_multiplier > 1) {
-            std::copy(time_ids.begin(), time_ids.end(), add_time_ids_data + time_ids.size());
-        }
+        
 
         ov::Tensor add_text_embeds = m_clip_text_encoder_with_projection->infer(positive_prompt, generation_config.negative_prompt, batch_size_multiplier > 1);
         m_clip_text_encoder->infer(positive_prompt, generation_config.negative_prompt, batch_size_multiplier > 1);
@@ -335,7 +348,7 @@ private:
             vae_scale_factor);
     }
 
-    std::shared_ptr<SD3Transformer2DModel> transformer;
+    std::shared_ptr<SD3Transformer2DModel> m_transformer;
     std::shared_ptr<CLIPTextModel> m_clip_text_encoder;
     std::shared_ptr<CLIPTextModelWithProjection> m_clip_text_encoder_with_projection;
     // TODO:

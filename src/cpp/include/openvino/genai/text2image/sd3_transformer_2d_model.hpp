@@ -5,14 +5,11 @@
 
 #include <string>
 
-#include "openvino/genai/visibility.hpp"
-// #include "openvino/genai/tokenizer.hpp"
-
 #include "openvino/core/any.hpp"
-#include "openvino/runtime/tensor.hpp"
+#include "openvino/genai/visibility.hpp"
 #include "openvino/runtime/infer_request.hpp"
 #include "openvino/runtime/properties.hpp"
-
+#include "openvino/runtime/tensor.hpp"
 
 namespace ov {
 namespace genai {
@@ -37,33 +34,31 @@ public:
 
     explicit SD3Transformer2DModel(const std::string root_dir);
 
-    SD3Transformer2DModel(const std::string& root_dir,
-                  const std::string& device,
-                  const ov::AnyMap& properties = {});
+    SD3Transformer2DModel(const std::string& root_dir, const std::string& device, const ov::AnyMap& properties = {});
 
     template <typename... Properties,
               typename std::enable_if<ov::util::StringAny<Properties...>::value, bool>::type = true>
-    SD3Transformer2DModel(const std::string& root_dir,
-                  const std::string& device,
-                  Properties&&... properties)
-        : SD3Transformer2DModel(root_dir, device, ov::AnyMap{std::forward<Properties>(properties)...}) { }
+    SD3Transformer2DModel(const std::string& root_dir, const std::string& device, Properties&&... properties)
+        : SD3Transformer2DModel(root_dir, device, ov::AnyMap{std::forward<Properties>(properties)...}) {}
 
     SD3Transformer2DModel(const CLIPTextModelWithProjection&);
 
     const Config& get_config() const;
 
-    // SD3Transformer2DModel& reshape(int batch_size);
+    SD3Transformer2DModel& reshape(int batch_size);
 
     SD3Transformer2DModel& compile(const std::string& device, const ov::AnyMap& properties = {});
 
     template <typename... Properties>
-    ov::util::EnableIfAllStringAny<CLIPTextModelWithProjection&, Properties...> compile(
-            const std::string& device,
-            Properties&&... properties) {
+    ov::util::EnableIfAllStringAny<CLIPTextModelWithProjection&, Properties...> compile(const std::string& device,
+                                                                                        Properties&&... properties) {
         return compile(device, ov::AnyMap{std::forward<Properties>(properties)...});
     }
 
-    ov::Tensor infer();
+    ov::Tensor SD3Transformer2DModel::infer(const ov::Tensor latent,
+                                            const ov::Tensor timestep,
+                                            const ov::Tensor prompt_embeds,
+                                            const ov::Tensor pooled_prompt_embeds);
 
 private:
     Config m_config;
@@ -73,5 +68,5 @@ private:
     // Tokenizer m_clip_tokenizer;
 };
 
-} // namespace genai
-} // namespace ov
+}  // namespace genai
+}  // namespace ov

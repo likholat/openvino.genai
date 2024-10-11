@@ -3,6 +3,7 @@
 
 #include "text2image/stable_diffusion_pipeline.hpp"
 #include "text2image/stable_diffusion_xl_pipeline.hpp"
+#include "text2image/stable_diffusion_3_pipeline.hpp"
 
 #include <ctime>
 #include <cstdlib>
@@ -112,10 +113,10 @@ Text2ImagePipeline Text2ImagePipeline::latent_consistency_model(
 
 Text2ImagePipeline Text2ImagePipeline::stable_diffusion_xl(
     const std::shared_ptr<Scheduler>& scheduler,
-        const CLIPTextModel& clip_text_model,
-        const CLIPTextModelWithProjection& clip_text_model_with_projection,
-        const UNet2DConditionModel& unet,
-        const AutoencoderKL& vae_decoder) {
+    const CLIPTextModel& clip_text_model,
+    const CLIPTextModelWithProjection& clip_text_model_with_projection,
+    const UNet2DConditionModel& unet,
+    const AutoencoderKL& vae_decoder) {
     auto impl = std::make_shared<StableDiffusionXLPipeline>(clip_text_model, clip_text_model_with_projection, unet, vae_decoder);
 
     assert(scheduler != nullptr);
@@ -123,6 +124,21 @@ Text2ImagePipeline Text2ImagePipeline::stable_diffusion_xl(
 
     return Text2ImagePipeline(impl);
 }
+
+Text2ImagePipeline Text2ImagePipeline::stable_diffusion_3(
+    const std::shared_ptr<Scheduler>& scheduler_type,
+    const CLIPTextModel& clip_text_model,
+    const CLIPTextModelWithProjection& clip_text_model_with_projection,
+    const UNet2DConditionModel& unet,
+    const AutoencoderKL& vae_decoder,
+    const SD3Transformer2DModel& transformer){
+    auto impl = std::make_shared<StableDiffusion3Pipeline>(clip_text_model, clip_text_model_with_projection, unet, vae_decoder, transformer);
+
+    assert(scheduler != nullptr);
+    impl->set_scheduler(scheduler);
+
+    return Text2ImagePipeline(impl);
+    }
 
 Text2ImagePipeline::GenerationConfig Text2ImagePipeline::get_generation_config() const {
     return m_impl->get_generation_config();

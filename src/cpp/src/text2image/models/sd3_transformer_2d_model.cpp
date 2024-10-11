@@ -41,6 +41,13 @@ const SD3Transformer2DModel::Config& SD3Transformer2DModel::get_config() const {
     return m_config;
 }
 
+// TODO:
+SD3Transformer2DModel& SD3Transformer2DModel::reshape(int batch_size) {
+    OPENVINO_ASSERT(m_model, "Model has been already compiled. Cannot reshape already compiled model");
+
+    return *this;
+}
+
 SD3Transformer2DModel& SD3Transformer2DModel::compile(const std::string& device, const ov::AnyMap& properties) {
     OPENVINO_ASSERT(m_model, "Model has been already compiled. Cannot re-compile already compiled model");
     ov::CompiledModel compiled_model = ov::Core().compile_model(m_model, device, properties);
@@ -49,4 +56,19 @@ SD3Transformer2DModel& SD3Transformer2DModel::compile(const std::string& device,
     m_model.reset();
 
     return *this;
+}
+
+ov::Tensor SD3Transformer2DModel::infer(const ov::Tensor latent,
+                                        const ov::Tensor timestep,
+                                        const ov::Tensor prompt_embeds,
+                                        const ov::Tensor pooled_prompt_embeds) {
+    OPENVINO_ASSERT(m_request, "Transformer model must be compiled first. Cannot infer non-compiled model");
+
+    m_request.set_tensor("hidden_states", latent);
+    m_request.set_tensor("timestep", timestep);
+    m_request.set_tensor("encoder_hidden_states", prompt_embeds);
+    m_request.set_tensor("pooled_projections", pooled_prompt_embeds);
+    m_request.infer();
+
+    return m_request.get_output_tensor();
 }
