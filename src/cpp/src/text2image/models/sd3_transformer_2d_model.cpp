@@ -3,6 +3,14 @@
 
 #include "openvino/genai/text2image/sd3_transformer_2d_model.hpp"
 
+#include "utils.hpp"
+#include "openvino/runtime/core.hpp"
+
+#include <fstream>
+
+namespace ov {
+namespace genai {
+
 SD3Transformer2DModel::Config::Config(const std::string& config_path) {
     std::ifstream file(config_path);
     OPENVINO_ASSERT(file.is_open(), "Failed to open ", config_path);
@@ -72,3 +80,6 @@ ov::Tensor SD3Transformer2DModel::infer(const ov::Tensor latent,
 
     return m_request.get_output_tensor();
 }
+
+} // namespace genai
+} // namespace ov

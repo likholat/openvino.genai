@@ -41,7 +41,7 @@ public:
     SD3Transformer2DModel(const std::string& root_dir, const std::string& device, Properties&&... properties)
         : SD3Transformer2DModel(root_dir, device, ov::AnyMap{std::forward<Properties>(properties)...}) {}
 
-    SD3Transformer2DModel(const CLIPTextModelWithProjection&);
+    SD3Transformer2DModel(const SD3Transformer2DModel&);
 
     const Config& get_config() const;
 
@@ -50,7 +50,7 @@ public:
     SD3Transformer2DModel& compile(const std::string& device, const ov::AnyMap& properties = {});
 
     template <typename... Properties>
-    ov::util::EnableIfAllStringAny<CLIPTextModelWithProjection&, Properties...> compile(const std::string& device,
+    ov::util::EnableIfAllStringAny<SD3Transformer2DModel&, Properties...> compile(const std::string& device,
                                                                                         Properties&&... properties) {
         return compile(device, ov::AnyMap{std::forward<Properties>(properties)...});
     }
@@ -65,7 +65,6 @@ private:
     ov::InferRequest m_request;
     std::shared_ptr<ov::Model> m_model;
 
-    // Tokenizer m_clip_tokenizer;
 };
 
 }  // namespace genai

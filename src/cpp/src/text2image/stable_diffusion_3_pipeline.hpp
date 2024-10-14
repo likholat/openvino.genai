@@ -173,42 +173,43 @@ public:
             generation_config.random_generator = std::make_shared<CppStdGenerator>(seed);
         }
 
-        
+        std::string prompt_2 = !generation_config.prompt2.empty() ? eneration_config.prompt2 : positive_prompt;
+        std::string prompt_3 = !generation_config.prompt3.empty() ? eneration_config.prompt3 : positive_prompt;
 
-        ov::Tensor add_text_embeds = m_clip_text_encoder_with_projection->infer(positive_prompt, generation_config.negative_prompt, batch_size_multiplier > 1);
-        m_clip_text_encoder->infer(positive_prompt, generation_config.negative_prompt, batch_size_multiplier > 1);
-
-        // prompt_embeds = prompt_embeds.hidden_states[-2]
+        ov::Tensor prompt_embed = m_clip_text_encoder->infer(positive_prompt, "", false);
         size_t idx_hidden_state_1 = m_clip_text_encoder->get_config().num_hidden_layers;
-        ov::Tensor encoder_hidden_states_1 = m_clip_text_encoder->get_output_tensor(idx_hidden_state_1);
+        ov::Tensor pooled_prompt_embed = m_clip_text_encoder->get_output_tensor(idx_hidden_state_1);
+
+        ov::Tensor prompt_2_embed = m_clip_text_encoder_with_projection->infer(prompt_2, "", false);
         size_t idx_hidden_state_2 = m_clip_text_encoder_with_projection->get_config().num_hidden_layers;
-        ov::Tensor encoder_hidden_states_2 = m_clip_text_encoder_with_projection->get_output_tensor(idx_hidden_state_2);
+        ov::Tensor pooled_prompt_2_embed = m_clip_text_encoder_with_projection->get_output_tensor(idx_hidden_state_2);
 
-        ov::Shape ehs_1_shape = encoder_hidden_states_1.get_shape();
-        ov::Shape ehs_2_shape = encoder_hidden_states_2.get_shape();
+        ov::Shape pr_emb_shape = prompt_embed.get_shape();
+        ov::Shape pr_emb_2_shape = prompt_2_embed.get_shape();
 
-        OPENVINO_ASSERT(ehs_1_shape[0] == ehs_2_shape[0] && ehs_1_shape[1] == ehs_2_shape[1],
+        OPENVINO_ASSERT(pr_emb_shape[0] == pr_emb_2_shape[0] && pr_emb_shape[1] == pr_emb_2_shape[1],
                         "Tensors for concatenation must have the same dimensions");
     
         // concatenate hidden_states from two encoders
-        ov::Shape encoder_hidden_states_shape = {ehs_1_shape[0], ehs_1_shape[1], ehs_1_shape[2] + ehs_2_shape[2]};
-        ov::Tensor encoder_hidden_states(encoder_hidden_states_1.get_element_type(), encoder_hidden_states_shape);
+        ov::Shape clip_prompt_embeds_shape = {pr_emb_shape[0], pr_emb_shape[1], pr_emb_shape[2] + pr_emb_2_shape[2]};
+        ov::Tensor clip_prompt_embeds(pr_emb_shape.get_element_type(), clip_prompt_embeds_shape);
 
-        const float* ehs_1_data = encoder_hidden_states_1.data<const float>();
-        const float* ehs_2_data = encoder_hidden_states_2.data<const float>();
-        float* encoder_hidden_states_data = encoder_hidden_states.data<float>();
+        const float* pr_emb_1_data = prompt_embed.data<const float>();
+        const float* pr_emb_2_data = prompt_2_embed.data<const float>();
+        float* clip_prompt_embeds_data = clip_prompt_embeds.data<float>();
 
-        for (size_t i = 0; i < ehs_1_shape[0]; ++i) {
-            for (size_t j = 0; j < ehs_1_shape[1]; ++j) {
-                size_t offset_1 = (i * ehs_1_shape[1] + j) * ehs_1_shape[2];
-                size_t offset_2 = (i * ehs_2_shape[1] + j) * ehs_2_shape[2];
-                
-                size_t step = (i * ehs_1_shape[1] + j) * (ehs_1_shape[2] + ehs_2_shape[2]);
-                
-                std::memcpy(encoder_hidden_states_data + step, ehs_1_data + offset_1, ehs_1_shape[2] * sizeof(float));
-                std::memcpy(encoder_hidden_states_data + step + ehs_1_shape[2], ehs_2_data + offset_2, ehs_2_shape[2] * sizeof(float));
+        for (size_t i = 0; i < pr_emb_shape[0]; ++i) {
+            for (size_t j = 0; j < pr_emb_shape[1]; ++j) {
+                size_t offset_1 = (i * pr_emb_shape[1] + j) * pr_emb_shape[2];
+                size_t offset_2 = (i * pr_emb_2_shape[1] + j) * pr_emb_2_shape[2];
+
+                size_t step = (i * pr_emb_shape[1] + j) * (pr_emb_shape[2] + pr_emb_2_shape[2]);
+
+                std::memcpy(encoder_hidden_states_data + step, pr_emb_1_data + offset_1, pr_emb_shape[2] * sizeof(float));
+                std::memcpy(encoder_hidden_states_data + step + pr_emb_shape[2], pr_emb_2_data + offset_2, pr_emb_2_shape[2] * sizeof(float));
             }
         }
+
 
         // replicate encoder hidden state to UNet model
         if (generation_config.num_images_per_prompt == 1) {
@@ -332,7 +333,7 @@ private:
         m_generation_config.height = unet_config.sample_size * vae_scale_factor;
         m_generation_config.width = unet_config.sample_size * vae_scale_factor;
 
-        if (class_name == "StableDiffusionXLPipeline") {
+        if (class_name == "StableDiffusion3Pipeline") {
             m_generation_config.guidance_scale = 5.0f;
             m_generation_config.num_inference_steps = 50;
         } else {
