@@ -64,7 +64,6 @@ private:
     Config m_config;
     ov::InferRequest m_request;
     std::shared_ptr<ov::Model> m_model;
-
 };
 
 }  // namespace genai
