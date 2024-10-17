@@ -126,7 +126,7 @@ Text2ImagePipeline Text2ImagePipeline::stable_diffusion_xl(
 }
 
 Text2ImagePipeline Text2ImagePipeline::stable_diffusion_3(
-    const std::shared_ptr<Scheduler>& scheduler_type,
+    const std::shared_ptr<Scheduler>& scheduler,
     const CLIPTextModel& clip_text_model,
     const CLIPTextModelWithProjection& clip_text_model_with_projection,
     const UNet2DConditionModel& unet,
@@ -138,7 +138,7 @@ Text2ImagePipeline Text2ImagePipeline::stable_diffusion_3(
     impl->set_scheduler(scheduler);
 
     return Text2ImagePipeline(impl);
-    }
+}
 
 Text2ImagePipeline::GenerationConfig Text2ImagePipeline::get_generation_config() const {
     return m_impl->get_generation_config();

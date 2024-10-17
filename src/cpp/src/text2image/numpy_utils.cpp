@@ -110,6 +110,18 @@ void concat_3d_by_cols(const float* data_1, const float* data_2, float* res, con
     }
 }
 
+void concat_3d_by_channels(const float* data_1, const float* data_2, float* res, const ov::Shape shape_1, const ov::Shape shape_2) {
+    OPENVINO_ASSERT(
+            shape_1[1] == shape_2[1] && shape_1[2] == shape_2[2],
+            "Tensors for concatenation must have the same dimensions");
+    
+        size_t size_1 = shape_1[0] * shape_1[1] * shape_1[2];
+        size_t size_2 = shape_2[0] * shape_2[1] * shape_2[2];
+
+        std::memcpy(res, data_1 + size_1, size_1 * sizeof(float));
+        std::memcpy(res + size_1, data_2 + size_2, size_2 * sizeof(float));
+}
+
 
 } // namespace ov
 } // namespace genai

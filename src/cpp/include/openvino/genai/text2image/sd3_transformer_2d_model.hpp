@@ -55,7 +55,7 @@ public:
         return compile(device, ov::AnyMap{std::forward<Properties>(properties)...});
     }
 
-    ov::Tensor SD3Transformer2DModel::infer(const ov::Tensor latent,
+    ov::Tensor infer(const ov::Tensor latent,
                                             const ov::Tensor timestep,
                                             const ov::Tensor prompt_embeds,
                                             const ov::Tensor pooled_prompt_embeds);
