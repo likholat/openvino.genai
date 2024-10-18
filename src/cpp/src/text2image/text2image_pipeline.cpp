@@ -67,6 +67,8 @@ Text2ImagePipeline::Text2ImagePipeline(const std::string& root_dir) {
         m_impl = std::make_shared<StableDiffusionPipeline>(root_dir);
     } else if (class_name == "StableDiffusionXLPipeline") {
         m_impl = std::make_shared<StableDiffusionXLPipeline>(root_dir);
+    } else if (class_name == "StableDiffusion3Pipeline") {
+        m_impl = std::make_shared<StableDiffusion3Pipeline>(root_dir);
     } else {
         OPENVINO_THROW("Unsupported text to image generation pipeline '", class_name, "'");
     }
@@ -80,6 +82,8 @@ Text2ImagePipeline::Text2ImagePipeline(const std::string& root_dir, const std::s
         m_impl = std::make_shared<StableDiffusionPipeline>(root_dir, device, properties);
     } else if (class_name == "StableDiffusionXLPipeline") {
         m_impl = std::make_shared<StableDiffusionXLPipeline>(root_dir, device, properties);
+    } else if (class_name == "StableDiffusion3Pipeline") {
+        m_impl = std::make_shared<StableDiffusion3Pipeline>(root_dir, device, properties);
     } else {
         OPENVINO_THROW("Unsupported text to image generation pipeline '", class_name, "'");
     }
@@ -127,12 +131,11 @@ Text2ImagePipeline Text2ImagePipeline::stable_diffusion_xl(
 
 Text2ImagePipeline Text2ImagePipeline::stable_diffusion_3(
     const std::shared_ptr<Scheduler>& scheduler,
-    const CLIPTextModel& clip_text_model,
+    const CLIPTextModelWithProjection& clip_text_model,
     const CLIPTextModelWithProjection& clip_text_model_with_projection,
-    const UNet2DConditionModel& unet,
     const AutoencoderKL& vae_decoder,
     const SD3Transformer2DModel& transformer){
-    auto impl = std::make_shared<StableDiffusion3Pipeline>(clip_text_model, clip_text_model_with_projection, unet, vae_decoder, transformer);
+    auto impl = std::make_shared<StableDiffusion3Pipeline>(clip_text_model, clip_text_model_with_projection, vae_decoder, transformer);
 
     assert(scheduler != nullptr);
     impl->set_scheduler(scheduler);

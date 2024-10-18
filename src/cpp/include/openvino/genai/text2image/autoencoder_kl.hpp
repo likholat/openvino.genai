@@ -23,6 +23,7 @@ public:
         size_t latent_channels = 4;
         size_t out_channels = 3;
         float scaling_factor = 0.18215f;
+        float shift_factor = 0.0609f;
         std::vector<size_t> block_out_channels = { 64 };
 
         explicit Config(const std::string& config_path);
@@ -46,6 +47,8 @@ public:
     AutoencoderKL& reshape(int batch_size, int height, int width);
 
     AutoencoderKL& compile(const std::string& device, const ov::AnyMap& properties = {});
+
+    const Config& get_config() const;
 
     template <typename... Properties>
     ov::util::EnableIfAllStringAny<AutoencoderKL&, Properties...> compile(

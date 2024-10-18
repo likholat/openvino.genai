@@ -42,7 +42,7 @@ FlowMatchEulerDiscreteScheduler::FlowMatchEulerDiscreteScheduler(const Config& s
 
     auto linspaced = linspace<float>(1.0f, static_cast<float>(num_train_timesteps), num_train_timesteps, true);
     for (auto it = linspaced.rbegin(); it != linspaced.rend(); ++it) {
-        m_timesteps.push_back(static_cast<int64_t>(std::round(*it)));
+        m_timesteps.push_back(*it);
     }
 
     std::transform(m_timesteps.begin(),
@@ -58,13 +58,12 @@ FlowMatchEulerDiscreteScheduler::FlowMatchEulerDiscreteScheduler(const Config& s
         });
     }
 
-    // check if m_timesteps shouldn't be float
     for (size_t i = 0; i < m_timesteps.size(); ++i) {
-        m_timesteps[i] = static_cast<int64_t>(m_sigmas[i] * num_train_timesteps);
+        m_timesteps[i] = m_sigmas[i] * num_train_timesteps;
     }
 
     m_step_index = -1, m_begin_index = -1;
-    m_sigma_min = m_sigmas[0], m_sigma_max = m_sigmas.back();
+    m_sigma_max = m_sigmas[0], m_sigma_min = m_sigmas.back();
 }
 
 float FlowMatchEulerDiscreteScheduler::sigma_to_t(float sigma) {
@@ -72,14 +71,17 @@ float FlowMatchEulerDiscreteScheduler::sigma_to_t(float sigma) {
 }
 
 void FlowMatchEulerDiscreteScheduler::set_timesteps(size_t num_inference_steps) {
+    m_timesteps.clear();
+    m_sigmas.clear();
+
     m_num_inference_steps = num_inference_steps;
     int32_t num_train_timesteps = m_config.num_train_timesteps;
     float shift = m_config.shift;
 
     using numpy_utils::linspace;
-    auto linspaced = linspace<float>(sigma_to_t(m_sigma_max), sigma_to_t(m_sigma_min), m_num_inference_steps, true);
-    for (float& i : linspaced) {
-        m_timesteps.push_back(static_cast<int64_t>(std::round(i)));
+    m_timesteps = linspace<float>(sigma_to_t(m_sigma_max), sigma_to_t(m_sigma_min), m_num_inference_steps, true);
+
+    for (const float& i : m_timesteps) {
         m_sigmas.push_back(i / num_train_timesteps);
     }
 
@@ -101,10 +103,8 @@ std::map<std::string, ov::Tensor> FlowMatchEulerDiscreteScheduler::step(ov::Tens
     // latents - sample
     // inference_step
 
-    size_t timestep = m_timesteps[inference_step];
-
     if (m_step_index == -1)
-        init_step_index(timestep);
+        init_step_index();
 
     ov::Tensor prev_sample(latents.get_element_type(), latents.get_shape());
     float* prev_sample_data = prev_sample.data<float>();
@@ -122,7 +122,11 @@ std::map<std::string, ov::Tensor> FlowMatchEulerDiscreteScheduler::step(ov::Tens
     return {{"latent", prev_sample}};
 }
 
-std::vector<int64_t> FlowMatchEulerDiscreteScheduler::get_timesteps() const {
+std::vector<std::int64_t> FlowMatchEulerDiscreteScheduler::get_timesteps() const {
+    return std::vector<std::int64_t>();
+}
+
+std::vector<float> FlowMatchEulerDiscreteScheduler::get_float_timesteps() const {
     return m_timesteps;
 }
 
@@ -138,7 +142,7 @@ void FlowMatchEulerDiscreteScheduler::set_begin_index(size_t begin_index) {
     m_begin_index = begin_index;
 }
 
-void FlowMatchEulerDiscreteScheduler::init_step_index(size_t step_index) {
+void FlowMatchEulerDiscreteScheduler::init_step_index() {
     // TODO: support index_for_timestep method
     m_step_index = (m_begin_index == -1) ? 0 : m_begin_index;
 }

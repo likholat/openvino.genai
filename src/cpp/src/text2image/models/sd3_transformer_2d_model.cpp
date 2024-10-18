@@ -50,8 +50,30 @@ const SD3Transformer2DModel::Config& SD3Transformer2DModel::get_config() const {
 }
 
 // TODO:
-SD3Transformer2DModel& SD3Transformer2DModel::reshape(int batch_size) {
+SD3Transformer2DModel& SD3Transformer2DModel::reshape(int batch_size, int height, int width, int tokenizer_model_max_length) {
     OPENVINO_ASSERT(m_model, "Model has been already compiled. Cannot reshape already compiled model");
+
+    // height /= m_vae_scale_factor;
+    // width /= m_vae_scale_factor;
+
+    // std::map<std::string, ov::PartialShape> name_to_shape;
+
+    // for (auto && input : m_model->inputs()) {
+    //     std::string input_name = input.get_any_name();
+    //     name_to_shape[input_name] = input.get_partial_shape();
+    //     if (input_name == "timestep") {
+    //         name_to_shape[input_name][0] = 1;
+    //     } else if (input_name == "sample") {
+    //         name_to_shape[input_name] = {batch_size, name_to_shape[input_name][1], height, width};
+    //     } else if (input_name == "time_ids" || input_name == "text_embeds") {
+    //         name_to_shape[input_name][0] = batch_size;
+    //     } else if (input_name == "encoder_hidden_states") {
+    //         name_to_shape[input_name][0] = batch_size;
+    //         name_to_shape[input_name][1] = tokenizer_model_max_length;
+    //     }
+    // }
+
+    // m_model->reshape(name_to_shape);
 
     return *this;
 }
@@ -66,16 +88,24 @@ SD3Transformer2DModel& SD3Transformer2DModel::compile(const std::string& device,
     return *this;
 }
 
+void SD3Transformer2DModel::set_hidden_states(const std::string& tensor_name, ov::Tensor encoder_hidden_states) {
+    OPENVINO_ASSERT(m_request, "Transformer model must be compiled first");
+    m_request.set_tensor(tensor_name, encoder_hidden_states);
+}
+
 ov::Tensor SD3Transformer2DModel::infer(const ov::Tensor latent,
-                                        const ov::Tensor timestep,
-                                        const ov::Tensor prompt_embeds,
-                                        const ov::Tensor pooled_prompt_embeds) {
+                                        const ov::Tensor timestep) {
     OPENVINO_ASSERT(m_request, "Transformer model must be compiled first. Cannot infer non-compiled model");
+
+            //hidden_states=latent_model_input,
+            //timestep=timestep,
+            //encoder_hidden_states=prompt_embeds,
+            //pooled_projections=pooled_prompt_embeds,
 
     m_request.set_tensor("hidden_states", latent);
     m_request.set_tensor("timestep", timestep);
-    m_request.set_tensor("encoder_hidden_states", prompt_embeds);
-    m_request.set_tensor("pooled_projections", pooled_prompt_embeds);
+    // m_request.set_tensor("encoder_hidden_states", prompt_embeds);
+    // m_request.set_tensor("pooled_projections", pooled_prompt_embeds);
     m_request.infer();
 
     return m_request.get_output_tensor();

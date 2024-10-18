@@ -25,6 +25,7 @@ void padding_right(const float* src, float* res, const ov::Shape src_size, const
         }
     }
 }
+
 }  // namespace
 
 namespace ov {
@@ -43,8 +44,8 @@ public:
         set_scheduler(Scheduler::from_config(root_dir + "/scheduler/scheduler_config.json"));
 
         const std::string text_encoder = data["text_encoder"][1].get<std::string>();
-        if (text_encoder == "CLIPTextModel") {
-            m_clip_text_encoder = std::make_shared<CLIPTextModel>(root_dir + "/text_encoder");
+        if (text_encoder == "CLIPTextModelWithProjection") {
+            m_clip_text_encoder = std::make_shared<CLIPTextModelWithProjection>(root_dir + "/text_encoder");
         } else {
             OPENVINO_THROW("Unsupported '", text_encoder, "' text encoder type");
         }
@@ -65,13 +66,6 @@ public:
         //     OPENVINO_THROW("Unsupported '", text_encoder, "' text encoder type");
         // }
 
-        const std::string unet = data["unet"][1].get<std::string>();
-        if (unet == "UNet2DConditionModel") {
-            m_unet = std::make_shared<UNet2DConditionModel>(root_dir + "/unet");
-        } else {
-            OPENVINO_THROW("Unsupported '", unet, "' UNet type");
-        }
-
         const std::string vae = data["vae"][1].get<std::string>();
         if (vae == "AutoencoderKL") {
             m_vae_decoder = std::make_shared<AutoencoderKL>(root_dir + "/vae_decoder");
@@ -80,7 +74,7 @@ public:
         }
 
         const std::string transformer = data["transformer"][1].get<std::string>();
-        if (vae == "SD3Transformer2DModel") {
+        if (transformer == "SD3Transformer2DModel") {
             m_transformer = std::make_shared<SD3Transformer2DModel>(root_dir + "/transformer");
         } else {
             OPENVINO_THROW("Unsupported '", transformer, "'Transformer type");
@@ -101,8 +95,9 @@ public:
         set_scheduler(Scheduler::from_config(root_dir + "/scheduler/scheduler_config.json"));
 
         const std::string text_encoder = data["text_encoder"][1].get<std::string>();
-        if (text_encoder == "CLIPTextModel") {
-            m_clip_text_encoder = std::make_shared<CLIPTextModel>(root_dir + "/text_encoder", device, properties);
+        if (text_encoder == "CLIPTextModelWithProjection") {
+            m_clip_text_encoder =
+                std::make_shared<CLIPTextModelWithProjection>(root_dir + "/text_encoder", device, properties);
         } else {
             OPENVINO_THROW("Unsupported '", text_encoder, "' text encoder type");
         }
@@ -117,13 +112,6 @@ public:
 
         // TODO: text_encoder_3
 
-        const std::string unet = data["unet"][1].get<std::string>();
-        if (unet == "UNet2DConditionModel") {
-            m_unet = std::make_shared<UNet2DConditionModel>(root_dir + "/unet", device, properties);
-        } else {
-            OPENVINO_THROW("Unsupported '", unet, "' UNet type");
-        }
-
         const std::string vae = data["vae"][1].get<std::string>();
         if (vae == "AutoencoderKL") {
             m_vae_decoder = std::make_shared<AutoencoderKL>(root_dir + "/vae_decoder", device, properties);
@@ -132,8 +120,8 @@ public:
         }
 
         const std::string transformer = data["transformer"][1].get<std::string>();
-        if (vae == "SD3Transformer2DModel") {
-            m_transformer = std::make_shared<SD3Transformer2DModel>(root_dir + "/transformer");
+        if (transformer == "SD3Transformer2DModel") {
+            m_transformer = std::make_shared<SD3Transformer2DModel>(root_dir + "/transformer", device, properties);
         } else {
             OPENVINO_THROW("Unsupported '", transformer, "'Transformer type");
         }
@@ -142,15 +130,13 @@ public:
         initialize_generation_config(data["_class_name"].get<std::string>());
     }
 
-    StableDiffusion3Pipeline(const CLIPTextModel& clip_text_model,
+    StableDiffusion3Pipeline(const CLIPTextModelWithProjection& clip_text_model,
                              const CLIPTextModelWithProjection& clip_text_model_with_projection,
-                             const UNet2DConditionModel& unet,
                              const AutoencoderKL& vae_decoder,
                              const SD3Transformer2DModel& transformer)
-        : m_clip_text_encoder(std::make_shared<CLIPTextModel>(clip_text_model)),
+        : m_clip_text_encoder(std::make_shared<CLIPTextModelWithProjection>(clip_text_model)),
           m_clip_text_encoder_with_projection(
               std::make_shared<CLIPTextModelWithProjection>(clip_text_model_with_projection)),
-          m_unet(std::make_shared<UNet2DConditionModel>(unet)),
           m_vae_decoder(std::make_shared<AutoencoderKL>(vae_decoder)),
           m_transformer(std::make_shared<SD3Transformer2DModel>(transformer)) {}
 
@@ -164,10 +150,10 @@ public:
             do_classifier_free_guidance(guidance_scale) ? 2 : 1;  // Unet accepts 2x batch in case of CFG
         m_clip_text_encoder->reshape(batch_size_multiplier);
         m_clip_text_encoder_with_projection->reshape(batch_size_multiplier);
-        m_unet->reshape(num_images_per_prompt * batch_size_multiplier,
-                        height,
-                        width,
-                        m_clip_text_encoder->get_config().max_position_embeddings);
+        m_transformer->reshape(num_images_per_prompt * batch_size_multiplier,
+                               height,
+                               width,
+                               m_clip_text_encoder->get_config().max_position_embeddings);
         m_vae_decoder->reshape(num_images_per_prompt, height, width);
         // TODO: transformer reshape
     }
@@ -175,29 +161,27 @@ public:
     void compile(const std::string& device, const ov::AnyMap& properties) override {
         m_clip_text_encoder->compile(device, properties);
         m_clip_text_encoder_with_projection->compile(device, properties);
-        m_unet->compile(device, properties);
         m_vae_decoder->compile(device, properties);
         m_transformer->compile(device, properties);
     }
 
     ov::Tensor generate(const std::string& positive_prompt, const ov::AnyMap& properties) override {
-        using numpy_utils::concat_3d_by_channels;
-        using numpy_utils::concat_3d_by_cols;
-        using numpy_utils::concat_3d_by_rows;
-
+        using namespace numpy_utils;
         GenerationConfig generation_config = m_generation_config;
         generation_config.update_generation_config(properties);
 
-        const auto& unet_config = m_unet->get_config();
+        const auto& transformer_config = m_transformer->get_config();
         const size_t batch_size_multiplier = do_classifier_free_guidance(generation_config.guidance_scale)
                                                  ? 2
-                                                 : 1;  // Unet accepts 2x batch in case of CFG
-        const size_t vae_scale_factor = m_unet->get_vae_scale_factor();
+                                                 : 1;  // Transformer accepts 2x batch in case of CFG
+
+        size_t vae_out_channels_size = m_vae_decoder->get_config().block_out_channels.size();
+        const size_t vae_scale_factor = std::pow(2, vae_out_channels_size - 1);
 
         if (generation_config.height < 0)
-            generation_config.height = unet_config.sample_size * vae_scale_factor;
+            generation_config.height = transformer_config.sample_size * vae_scale_factor;
         if (generation_config.width < 0)
-            generation_config.width = unet_config.sample_size * vae_scale_factor;
+            generation_config.width = transformer_config.sample_size * vae_scale_factor;
         check_inputs(generation_config.height, generation_config.width);
 
         if (generation_config.random_generator == nullptr) {
@@ -210,17 +194,18 @@ public:
 
         // 1. Encode positive prompt:
 
-        ov::Tensor prompt_embed = m_clip_text_encoder->infer(positive_prompt, "", false);
+        ov::Tensor pooled_prompt_embed = m_clip_text_encoder->infer(positive_prompt, "", false);
         size_t idx_hidden_state_1 = m_clip_text_encoder->get_config().num_hidden_layers;
-        ov::Tensor pooled_prompt_embed = m_clip_text_encoder->get_output_tensor(idx_hidden_state_1);
+        ov::Tensor prompt_embed = m_clip_text_encoder->get_output_tensor(idx_hidden_state_1);
 
-        ov::Tensor prompt_2_embed = m_clip_text_encoder_with_projection->infer(prompt_2_str, "", false);
+        ov::Tensor pooled_prompt_2_embed = m_clip_text_encoder_with_projection->infer(prompt_2_str, "", false);
         size_t idx_hidden_state_2 = m_clip_text_encoder_with_projection->get_config().num_hidden_layers;
-        ov::Tensor pooled_prompt_2_embed = m_clip_text_encoder_with_projection->get_output_tensor(idx_hidden_state_2);
+        ov::Tensor prompt_2_embed = m_clip_text_encoder_with_projection->get_output_tensor(idx_hidden_state_2);
 
         // concatenate hidden_states from two encoders
         ov::Shape pr_emb_shape = prompt_embed.get_shape();
         ov::Shape pr_emb_2_shape = prompt_2_embed.get_shape();
+        ;
 
         ov::Shape clip_prompt_embeds_shape = {pr_emb_shape[0], pr_emb_shape[1], pr_emb_shape[2] + pr_emb_2_shape[2]};
         ov::Tensor clip_prompt_embeds(prompt_embed.get_element_type(), clip_prompt_embeds_shape);
@@ -229,12 +214,18 @@ public:
         const float* pr_emb_2_data = prompt_2_embed.data<const float>();
         float* clip_prompt_embeds_data = clip_prompt_embeds.data<float>();
 
+        // std::cout << "prompt_embed" << std::endl;
+        // for (size_t i = 0; i < 10; ++i){
+        //     std::cout << pr_emb_1_data[i] << " ";
+        // }
+        // std::cout << std::endl;
+
         concat_3d_by_rows(pr_emb_1_data, pr_emb_2_data, clip_prompt_embeds_data, pr_emb_shape, pr_emb_2_shape);
 
         // TODO: text_encoder_3
-        ov::Shape t5_prompt_embed_shape = {batch_size_multiplier * generation_config.num_images_per_prompt,
+        ov::Shape t5_prompt_embed_shape = {generation_config.num_images_per_prompt,
                                            77,  // TODO: self.tokenizer.model_max_length
-                                           m_transformer->get_config().joint_attention_dim};
+                                           transformer_config.joint_attention_dim};
 
         std::vector<float> t5_prompt_embed(
             t5_prompt_embed_shape[0] * t5_prompt_embed_shape[1] * t5_prompt_embed_shape[2],
@@ -267,13 +258,17 @@ public:
         const float* pooled_prompt_embed_data = pooled_prompt_embed.data<float>();
         const float* pooled_prompt_2_embed_data = pooled_prompt_2_embed.data<float>();
 
-        ov::Shape pooled_prompt_embeds_shape = {p_pr_emb_shape[0],
-                                                p_pr_emb_shape[1],
-                                                p_pr_emb_shape[2] + p_pr_emb_2_shape[2]};
+        // std::cout << "pooled_prompt_embed" << std::endl;
+        // for (size_t i = 0; i < 10; ++i){
+        //     std::cout << pooled_prompt_embed_data[i] << " ";
+        // }
+        // std::cout << std::endl;
+
+        ov::Shape pooled_prompt_embeds_shape = {p_pr_emb_shape[0], p_pr_emb_shape[1] + p_pr_emb_2_shape[1]};
         ov::Tensor pooled_prompt_embeds(ov::element::f32, pooled_prompt_embeds_shape);
         float* pooled_prompt_embeds_data = pooled_prompt_embeds.data<float>();
 
-        concat_3d_by_rows(pooled_prompt_embed_data,
+        concat_2d_by_rows(pooled_prompt_embed_data,
                           pooled_prompt_2_embed_data,
                           pooled_prompt_embeds_data,
                           p_pr_emb_shape,
@@ -290,13 +285,12 @@ public:
         std::string negative_prompt_3_str =
             !generation_config.negative_prompt3.empty() ? generation_config.negative_prompt3 : negative_prompt_1_str;
 
-        ov::Tensor negative_prompt_embed = m_clip_text_encoder->infer(negative_prompt_1_str, "", false);
-        ov::Tensor negative_pooled_prompt_embed = m_clip_text_encoder->get_output_tensor(idx_hidden_state_1);
+        ov::Tensor negative_pooled_prompt_embed = m_clip_text_encoder->infer(negative_prompt_1_str, "", false);
+        ov::Tensor negative_prompt_embed = m_clip_text_encoder->get_output_tensor(idx_hidden_state_1);
 
-        ov::Tensor negative_prompt_2_embed =
-            m_clip_text_encoder_with_projection->infer(negative_prompt_2_str, "", false);
         ov::Tensor negative_pooled_prompt_2_embed =
-            m_clip_text_encoder_with_projection->get_output_tensor(idx_hidden_state_2);
+            m_clip_text_encoder_with_projection->infer(negative_prompt_2_str, "", false);
+        ov::Tensor negative_prompt_2_embed = m_clip_text_encoder_with_projection->get_output_tensor(idx_hidden_state_2);
 
         // concatenate hidden_states from two encoders
         ov::Shape n_pr_emb_1_shape = negative_prompt_embed.get_shape();
@@ -355,12 +349,11 @@ public:
         const float* neg_pooled_pr_2_emb_data = negative_pooled_prompt_2_embed.data<float>();
 
         ov::Shape neg_pooled_prompt_embeds_shape = {neg_pooled_pr_emb_shape[0],
-                                                    neg_pooled_pr_emb_shape[1],
-                                                    neg_pooled_pr_emb_shape[2] + neg_pooled_pr_2_emb_shape[2]};
+                                                    neg_pooled_pr_emb_shape[1] + neg_pooled_pr_2_emb_shape[1]};
         ov::Tensor neg_pooled_prompt_embeds(ov::element::f32, neg_pooled_prompt_embeds_shape);
         float* neg_pooled_prompt_embeds_data = neg_pooled_prompt_embeds.data<float>();
 
-        concat_3d_by_rows(neg_pooled_pr_emb_data,
+        concat_2d_by_rows(neg_pooled_pr_emb_data,
                           neg_pooled_pr_2_emb_data,
                           neg_pooled_prompt_embeds_data,
                           neg_pooled_pr_emb_shape,
@@ -368,7 +361,7 @@ public:
 
         // from steps above we'll use neg_prompt_embeds and neg_pooled_prompt_embeds tensors
 
-        ov::Tensor prompt_embeds_inp, pooled_prompt_embeds_input;
+        ov::Tensor prompt_embeds_inp, pooled_prompt_embeds_inp;
         if (do_classifier_free_guidance(generation_config.guidance_scale)) {
             ov::Shape prompt_embeds_inp_shape = {prompt_embeds_shape[0] + neg_prompt_embeds_shape[0],
                                                  prompt_embeds_shape[1],
@@ -383,157 +376,134 @@ public:
 
             ov::Shape pooled_prompt_embeds_inp_shape = {
                 neg_pooled_prompt_embeds_shape[0] + pooled_prompt_embeds_shape[0],
-                pooled_prompt_embeds_shape[1],
-                pooled_prompt_embeds_shape[2]};
-            pooled_prompt_embeds_input = ov::Tensor(ov::element::f32, pooled_prompt_embeds_inp_shape);
-            float* pooled_prompt_embeds_input_data = pooled_prompt_embeds_input.data<float>();
-            concat_3d_by_channels(neg_pooled_prompt_embeds_data,
+                pooled_prompt_embeds_shape[1]};
+            pooled_prompt_embeds_inp = ov::Tensor(ov::element::f32, pooled_prompt_embeds_inp_shape);
+            float* pooled_prompt_embeds_input_data = pooled_prompt_embeds_inp.data<float>();
+            concat_2d_by_channels(neg_pooled_prompt_embeds_data,
                                   pooled_prompt_embeds_data,
                                   pooled_prompt_embeds_input_data,
                                   neg_pooled_prompt_embeds_shape,
                                   pooled_prompt_embeds_shape);
+
         } else {
             prompt_embeds_inp = prompt_embeds;
-            pooled_prompt_embeds_input = pooled_prompt_embeds;
+            pooled_prompt_embeds_inp = pooled_prompt_embeds;
         }
 
         // 3. Prepare timesteps
+        m_scheduler->set_timesteps(generation_config.num_inference_steps);
+        std::vector<float> timesteps = m_scheduler->get_float_timesteps();
 
+        if (generation_config.num_images_per_prompt == 1) {
+            m_transformer->set_hidden_states("encoder_hidden_states", prompt_embeds_inp);
+            m_transformer->set_hidden_states("pooled_projections", pooled_prompt_embeds_inp);
 
-        // // replicate encoder hidden state to UNet model
-        // if (generation_config.num_images_per_prompt == 1) {
-        //     // reuse output of text encoder directly w/o extra memory copy
-        //     m_unet->set_hidden_states("encoder_hidden_states", encoder_hidden_states);
-        //     m_unet->set_hidden_states("text_embeds", add_text_embeds);
-        //     m_unet->set_hidden_states("time_ids", add_time_ids);
-        // } else {
-        //     ov::Shape enc_shape = encoder_hidden_states.get_shape();
-        //     enc_shape[0] *= generation_config.num_images_per_prompt;
+        } else {
+            // TODO: num_images_per_prompt>1
+        }
 
-        //     ov::Tensor encoder_hidden_states_repeated(encoder_hidden_states.get_element_type(), enc_shape);
-        //     for (size_t n = 0; n < generation_config.num_images_per_prompt; ++n) {
-        //         batch_copy(encoder_hidden_states, encoder_hidden_states_repeated, 0, n);
-        //         if (batch_size_multiplier > 1) {
-        //             batch_copy(encoder_hidden_states,
-        //                        encoder_hidden_states_repeated,
-        //                        1,
-        //                        generation_config.num_images_per_prompt + n);
-        //         }
-        //     }
+        // 4. Prepare latent variables
+        size_t num_channels_latents = m_transformer->get_config().in_channels;
+        ov::Shape latent_shape{generation_config.num_images_per_prompt,
+                               num_channels_latents,
+                               generation_config.height / vae_scale_factor,
+                               generation_config.width / vae_scale_factor};
 
-        //     m_unet->set_hidden_states("encoder_hidden_states", encoder_hidden_states_repeated);
+        ov::Shape latent_shape_cfg = latent_shape;
+        latent_shape_cfg[0] *= batch_size_multiplier;
 
-        //     ov::Shape t_emb_shape = add_text_embeds.get_shape();
-        //     t_emb_shape[0] *= generation_config.num_images_per_prompt;
+        ov::Tensor latent(ov::element::f32, latent_shape), latent_cfg(ov::element::f32, latent_shape_cfg);
+        std::generate_n(latent.data<float>(), latent.get_size(), [&]() -> float {
+            return generation_config.random_generator->next() * m_scheduler->get_init_noise_sigma();
+        });
 
-        //     ov::Tensor add_text_embeds_repeated(add_text_embeds.get_element_type(), t_emb_shape);
-        //     for (size_t n = 0; n < generation_config.num_images_per_prompt; ++n) {
-        //         batch_copy(add_text_embeds, add_text_embeds_repeated, 0, n);
-        //         if (batch_size_multiplier > 1) {
-        //             batch_copy(add_text_embeds,
-        //                        add_text_embeds_repeated,
-        //                        1,
-        //                        generation_config.num_images_per_prompt + n);
-        //         }
-        //     }
+        // # 5. Denoising loop
 
-        //     m_unet->set_hidden_states("text_embeds", add_text_embeds_repeated);
+        ov::Tensor noisy_residual_tensor(ov::element::f32, {});
+        ov::Tensor timestep;
+        for (size_t inference_step = 0; inference_step < generation_config.num_inference_steps; ++inference_step) {
+            // concat the same latent twice along a batch dimension in case of CFG
+            if (batch_size_multiplier > 1) {
+                batch_copy(latent, latent_cfg, 0, 0, generation_config.num_images_per_prompt);
+                batch_copy(latent,
+                           latent_cfg,
+                           0,
+                           generation_config.num_images_per_prompt,
+                           generation_config.num_images_per_prompt);
 
-        //     ov::Shape t_ids_shape = add_time_ids.get_shape();
-        //     t_ids_shape[0] *= generation_config.num_images_per_prompt;
-        //     ov::Tensor add_time_ids_repeated(add_time_ids.get_element_type(), t_ids_shape);
-        //     for (size_t n = 0; n < generation_config.num_images_per_prompt; ++n) {
-        //         batch_copy(add_time_ids, add_time_ids_repeated, 0, n);
-        //         if (batch_size_multiplier > 1) {
-        //             batch_copy(add_time_ids, add_time_ids_repeated, 1, generation_config.num_images_per_prompt + n);
-        //         }
-        //     }
+                timestep = ov::Tensor(ov::element::f32, {2});
+                float* timestep_data = timestep.data<float>();
+                timestep_data[0] = timesteps[inference_step], timestep_data[1] = timesteps[inference_step];
+            } else {
+                // just assign to save memory copy
+                latent_cfg = latent;
+                timestep = ov::Tensor(ov::element::f32, {1}, &timesteps[inference_step]);
+            }
 
-        //     m_unet->set_hidden_states("time_ids", add_time_ids_repeated);
-        // }
+            ov::Tensor noise_pred_tensor = m_transformer->infer(latent_cfg, timestep);
 
-        // m_scheduler->set_timesteps(generation_config.num_inference_steps);
-        // std::vector<std::int64_t> timesteps = m_scheduler->get_timesteps();
+            // std::cout << "noise_pred_tensor" << std::endl;
+            // float* noise_pred_tensor_data = noise_pred_tensor.data<float>();
+            // for (size_t i = 0; i < 10; ++i){
+            //     std::cout << noise_pred_tensor_data[i] << " ";
+            // }
+            // std::cout << std::endl;
 
-        // // latents are multiplied by 'init_noise_sigma'
-        // ov::Shape latent_shape{generation_config.num_images_per_prompt,
-        //                        unet_config.in_channels,
-        //                        generation_config.height / vae_scale_factor,
-        //                        generation_config.width / vae_scale_factor};
-        // ov::Shape latent_shape_cfg = latent_shape;
-        // latent_shape_cfg[0] *= batch_size_multiplier;
+            ov::Shape noise_pred_shape = noise_pred_tensor.get_shape();
+            noise_pred_shape[0] /= batch_size_multiplier;
+            noisy_residual_tensor.set_shape(noise_pred_shape);
 
-        // ov::Tensor latent(ov::element::f32, latent_shape), latent_cfg(ov::element::f32, latent_shape_cfg);
-        // std::generate_n(latent.data<float>(), latent.get_size(), [&]() -> float {
-        //     return generation_config.random_generator->next() * m_scheduler->get_init_noise_sigma();
-        // });
+            if (batch_size_multiplier > 1) {
+                // perform guidance
+                float* noisy_residual = noisy_residual_tensor.data<float>();
+                const float* noise_pred_uncond = noise_pred_tensor.data<const float>();
+                const float* noise_pred_text = noise_pred_uncond + noisy_residual_tensor.get_size();
 
-        // ov::Tensor denoised, noisy_residual_tensor(ov::element::f32, {});
-        // for (size_t inference_step = 0; inference_step < generation_config.num_inference_steps; inference_step++) {
-        //     // concat the same latent twice along a batch dimension in case of CFG
-        //     if (batch_size_multiplier > 1) {
-        //         batch_copy(latent, latent_cfg, 0, 0, generation_config.num_images_per_prompt);
-        //         batch_copy(latent,
-        //                    latent_cfg,
-        //                    0,
-        //                    generation_config.num_images_per_prompt,
-        //                    generation_config.num_images_per_prompt);
-        //     } else {
-        //         // just assign to save memory copy
-        //         latent_cfg = latent;
-        //     }
+                for (size_t i = 0; i < noisy_residual_tensor.get_size(); ++i) {
+                    noisy_residual[i] = noise_pred_uncond[i] +
+                                        generation_config.guidance_scale * (noise_pred_text[i] - noise_pred_uncond[i]);
+                }
+            } else {
+                noisy_residual_tensor = noise_pred_tensor;
+            }
 
-        //     m_scheduler->scale_model_input(latent_cfg, inference_step);
+            auto scheduler_step_result = m_scheduler->step(noisy_residual_tensor, latent, inference_step);
+            latent = scheduler_step_result["latent"];
 
-        //     ov::Tensor timestep(ov::element::i64, {1}, &timesteps[inference_step]);
-        //     ov::Tensor noise_pred_tensor = m_unet->infer(latent_cfg, timestep);
+            // float* latent_data = latent.data<float>();
+            // std::cout << "latent" << std::endl;
+            // for (size_t i = 0; i < 10; ++i) {
+            //     std::cout << latent_data[i] << " ";
+            // }
+            // std::cout << std::endl;
+        }
 
-        //     ov::Shape noise_pred_shape = noise_pred_tensor.get_shape();
-        //     noise_pred_shape[0] /= batch_size_multiplier;
-        //     noisy_residual_tensor.set_shape(noise_pred_shape);
+        float* latent_data = latent.data<float>();
+        for (size_t i = 0; i < latent.get_size(); ++i) {
+            latent_data[i] = (latent_data[i] / m_vae_decoder->get_config().scaling_factor) +
+                               m_vae_decoder->get_config().shift_factor;
+        }
 
-        //     if (batch_size_multiplier > 1) {
-        //         // perform guidance
-        //         float* noisy_residual = noisy_residual_tensor.data<float>();
-        //         const float* noise_pred_uncond = noise_pred_tensor.data<const float>();
-        //         const float* noise_pred_text = noise_pred_uncond + noisy_residual_tensor.get_size();
-
-        //         for (size_t i = 0; i < noisy_residual_tensor.get_size(); ++i) {
-        //             noisy_residual[i] = noise_pred_uncond[i] +
-        //                                 generation_config.guidance_scale * (noise_pred_text[i] -
-        //                                 noise_pred_uncond[i]);
-        //         }
-        //     } else {
-        //         noisy_residual_tensor = noise_pred_tensor;
-        //     }
-
-        //     auto scheduler_step_result = m_scheduler->step(noisy_residual_tensor, latent, inference_step);
-        //     latent = scheduler_step_result["latent"];
-
-        //     // check whether scheduler returns "denoised" image, which should be passed to VAE decoder
-        //     const auto it = scheduler_step_result.find("denoised");
-        //     denoised = it != scheduler_step_result.end() ? it->second : latent;
-        // }
-
-        // return m_vae_decoder->infer(denoised);
-        return ov::Tensor();
+        return m_vae_decoder->infer(latent);
     }
 
 private:
     bool do_classifier_free_guidance(float guidance_scale) const {
-        return guidance_scale > 1.0 && m_unet->get_config().time_cond_proj_dim < 0;
+        return guidance_scale > 1.0;
     }
 
     void initialize_generation_config(const std::string& class_name) override {
-        assert(m_unet != nullptr);
-        const auto& unet_config = m_unet->get_config();
-        const size_t vae_scale_factor = m_unet->get_vae_scale_factor();
+        assert(m_transformer != nullptr);
+        const auto& transformer_config = m_transformer->get_config();
 
-        m_generation_config.height = unet_config.sample_size * vae_scale_factor;
-        m_generation_config.width = unet_config.sample_size * vae_scale_factor;
+        size_t vae_out_channels_size = m_vae_decoder->get_config().block_out_channels.size();
+        const size_t vae_scale_factor = std::pow(2, vae_out_channels_size - 1);
+
+        m_generation_config.height = transformer_config.sample_size * vae_scale_factor;
+        m_generation_config.width = transformer_config.sample_size * vae_scale_factor;
 
         if (class_name == "StableDiffusion3Pipeline") {
-            m_generation_config.guidance_scale = 5.0f;
+            m_generation_config.guidance_scale = 7.5f;
             m_generation_config.num_inference_steps = 50;
         } else {
             OPENVINO_THROW("Unsupported class_name '", class_name, "'. Please, contact OpenVINO GenAI developers");
@@ -541,19 +511,21 @@ private:
     }
 
     void check_inputs(const int height, const int width) const override {
-        assert(m_unet != nullptr);
-        const size_t vae_scale_factor = m_unet->get_vae_scale_factor();
+        assert(m_transformer != nullptr);
+
+        size_t vae_out_channels_size = m_vae_decoder->get_config().block_out_channels.size();
+        const size_t vae_scale_factor = std::pow(2, vae_out_channels_size - 1);
+
         OPENVINO_ASSERT((height % vae_scale_factor == 0 || height < 0) && (width % vae_scale_factor == 0 || width < 0),
                         "Both 'width' and 'height' must be divisible by",
                         vae_scale_factor);
     }
 
     std::shared_ptr<SD3Transformer2DModel> m_transformer;
-    std::shared_ptr<CLIPTextModel> m_clip_text_encoder;
+    std::shared_ptr<CLIPTextModelWithProjection> m_clip_text_encoder;
     std::shared_ptr<CLIPTextModelWithProjection> m_clip_text_encoder_with_projection;
     // TODO:
-    // std::shared_ptr<T5EncoderModel> m_clip_text_encoder_with_projection;
-    std::shared_ptr<UNet2DConditionModel> m_unet;
+    // std::shared_ptr<T5EncoderModel> m_t5_encoder_model;
     std::shared_ptr<AutoencoderKL> m_vae_decoder;
 };
 

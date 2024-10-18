@@ -45,7 +45,7 @@ public:
 
     const Config& get_config() const;
 
-    SD3Transformer2DModel& reshape(int batch_size);
+    SD3Transformer2DModel& reshape(int batch_size, int height, int width, int tokenizer_model_max_length);
 
     SD3Transformer2DModel& compile(const std::string& device, const ov::AnyMap& properties = {});
 
@@ -55,10 +55,9 @@ public:
         return compile(device, ov::AnyMap{std::forward<Properties>(properties)...});
     }
 
-    ov::Tensor infer(const ov::Tensor latent,
-                                            const ov::Tensor timestep,
-                                            const ov::Tensor prompt_embeds,
-                                            const ov::Tensor pooled_prompt_embeds);
+    void set_hidden_states(const std::string& tensor_name, ov::Tensor encoder_hidden_states);
+
+    ov::Tensor infer(const ov::Tensor latent, const ov::Tensor timestep);
 
 private:
     Config m_config;
