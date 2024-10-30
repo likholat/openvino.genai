@@ -152,7 +152,6 @@ void concat_2d_by_channels(const float* data_1, const float* data_2, float* res,
         std::memcpy(res + size_1, data_2, size_2 * sizeof(float));
 }
 
-
 } // namespace ov
 } // namespace genai
 } // namespace numpy_utils

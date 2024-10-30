@@ -262,6 +262,10 @@ std::vector<float> EulerDiscreteScheduler::get_float_timesteps() const {
     OPENVINO_THROW("EulerDiscreteScheduler doesn't support float timesteps");
 }
 
+void EulerDiscreteScheduler::set_timesteps_with_sigma(std::vector<float> sigma, float mu) {
+    OPENVINO_THROW("EulerDiscreteScheduler doesn't support set_timesteps_with_sigma");
+}
+
 float EulerDiscreteScheduler::get_init_noise_sigma() const {
     float max_sigma = *std::max_element(m_sigmas.begin(), m_sigmas.end());
 

@@ -29,6 +29,8 @@ public:
     explicit FlowMatchEulerDiscreteScheduler(const Config& scheduler_config);
 
     void set_timesteps(size_t num_inference_steps) override;
+    
+    void set_timesteps_with_sigma(std::vector<float> sigma, float mu) override;
 
     std::vector<int64_t> get_timesteps() const override;
 

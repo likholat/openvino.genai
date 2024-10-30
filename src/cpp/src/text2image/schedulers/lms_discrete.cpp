@@ -191,6 +191,10 @@ std::vector<float> LMSDiscreteScheduler::get_float_timesteps() const {
     OPENVINO_THROW("LMSDiscreteScheduler doesn't support float timesteps");
 }
 
+void LMSDiscreteScheduler::set_timesteps_with_sigma(std::vector<float> sigma, float mu) {
+    OPENVINO_THROW("LMSDiscreteScheduler doesn't support set_timesteps_with_sigma");
+}
+
 std::map<std::string, ov::Tensor> LMSDiscreteScheduler::step(ov::Tensor noise_pred, ov::Tensor latents, size_t inference_step) {
     const float sigma = m_sigmas[inference_step];
 

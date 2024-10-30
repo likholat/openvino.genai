@@ -37,6 +37,8 @@ public:
 
     void set_timesteps(size_t num_inference_steps) override;
 
+    void set_timesteps_with_sigma(std::vector<float> sigma, float mu) override;
+
     std::vector<std::int64_t> get_timesteps() const override;
 
     std::vector<float> get_float_timesteps() const override;

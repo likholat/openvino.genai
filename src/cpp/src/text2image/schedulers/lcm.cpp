@@ -212,6 +212,10 @@ std::vector<float> LCMScheduler::get_float_timesteps() const {
     OPENVINO_THROW("LCMScheduler doesn't support float timesteps");
 }
 
+void LCMScheduler::set_timesteps_with_sigma(std::vector<float> sigma, float mu) {
+    OPENVINO_THROW("LCMScheduler doesn't support set_timesteps_with_sigma");
+}
+
 float LCMScheduler::get_init_noise_sigma() const {
     return 1.0f;
 }

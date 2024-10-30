@@ -4,6 +4,7 @@
 #include "text2image/schedulers/flow_match_euler_discrete.hpp"
 
 #include <cassert>
+#include <cmath>
 #include <fstream>
 #include <iterator>
 #include <random>
@@ -92,6 +93,36 @@ void FlowMatchEulerDiscreteScheduler::set_timesteps(size_t num_inference_steps) 
         m_sigmas[i] = shift * m_sigmas[i] / (1 + (shift - 1) * m_sigmas[i]);
         m_timesteps[i] = m_sigmas[i] * num_train_timesteps;
     }
+    m_sigmas.push_back(0);
+
+    m_step_index = -1, m_begin_index = -1;
+}
+
+void FlowMatchEulerDiscreteScheduler::set_timesteps_with_sigma(std::vector<float> sigma, float mu) {
+    m_timesteps.clear();
+    m_sigmas.clear();
+
+    m_sigmas = sigma;
+
+    float shift = m_config.shift;
+
+    // fill sigma
+    if (m_config.use_dynamic_shifting) {
+        float exp_mu = std::exp(mu);
+        for (size_t i = 0; i < m_sigmas.size(); ++i) {
+            m_sigmas[i] = exp_mu / (exp_mu + (1 / m_sigmas[i] - 1));
+        }
+    } else {
+        for (size_t i = 0; i < m_sigmas.size(); ++i) {
+            m_sigmas[i] = shift * m_sigmas[i] / (1 + (shift - 1) * m_sigmas[i]);
+        }
+    }
+
+    // fill timesteps
+    for (size_t i = 0; i < m_sigmas.size(); ++i) {
+        m_timesteps.push_back(m_sigmas[i] * m_config.num_train_timesteps);
+    }
+
     m_sigmas.push_back(0);
 
     m_step_index = -1, m_begin_index = -1;

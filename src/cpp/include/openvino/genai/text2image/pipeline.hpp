@@ -17,9 +17,11 @@
 #include "openvino/genai/lora_adapter.hpp"
 #include "openvino/genai/text2image/clip_text_model.hpp"
 #include "openvino/genai/text2image/clip_text_model_with_projection.hpp"
+#include "openvino/genai/text2image/t5_encoder_model.hpp"
 #include "openvino/genai/text2image/unet2d_condition_model.hpp"
 #include "openvino/genai/text2image/autoencoder_kl.hpp"
 #include "openvino/genai/text2image/sd3_transformer_2d_model.hpp"
+#include "openvino/genai/text2image/flux_transformer_2d_model.hpp"
 
 namespace ov {
 namespace genai {
@@ -142,6 +144,14 @@ public:
         const SD3Transformer2DModel& transformer,
         const AutoencoderKL& vae_decoder);
 
+    // creates Flux pipeline from building blocks
+    static Text2ImagePipeline flux(
+        const std::shared_ptr<Scheduler>& scheduler_type,
+        const CLIPTextModel& clip_text_model,
+        const T5EncoderModel t5_encoder_model,
+        const FluxTransformer2DModel& transformer,
+        const AutoencoderKL& vae_decoder);
+
     GenerationConfig get_generation_config() const;
     void set_generation_config(const GenerationConfig& generation_config);
 
@@ -172,6 +182,7 @@ private:
     class StableDiffusionPipeline;
     class StableDiffusionXLPipeline;
     class StableDiffusion3Pipeline;
+    class FluxPipeline;
 };
 
 //

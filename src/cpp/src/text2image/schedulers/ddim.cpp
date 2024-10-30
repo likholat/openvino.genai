@@ -193,6 +193,10 @@ std::vector<float> DDIMScheduler::get_float_timesteps() const {
     OPENVINO_THROW("DDIMScheduler doesn't support float timesteps");
 }
 
+void DDIMScheduler::set_timesteps_with_sigma(std::vector<float> sigma, float mu) {
+    OPENVINO_THROW("DDIMScheduler doesn't support set_timesteps_with_sigma");
+}
+
 float DDIMScheduler::get_init_noise_sigma() const {
     return 1.0f;
 }
