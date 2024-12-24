@@ -111,7 +111,18 @@ namespace genai {
 
 class FluxPipeline : public DiffusionPipeline {
 public:
-    FluxPipeline(PipelineType pipeline_type, const std::filesystem::path& root_dir) : DiffusionPipeline(pipeline_type) {
+    explicit FluxPipeline(PipelineType pipeline_type) : DiffusionPipeline(pipeline_type) {
+        // TODO: support GPU as well
+        const std::string device = "CPU";
+
+        if (m_pipeline_type == PipelineType::IMAGE_2_IMAGE || m_pipeline_type == PipelineType::INPAINTING) {
+            const bool do_normalize = true, do_binarize = false, gray_scale_source = false;
+            m_image_processor = std::make_shared<ImageProcessor>(device, do_normalize, do_binarize, gray_scale_source);
+            m_image_resizer = std::make_shared<ImageResizer>(device, ov::element::u8, "NHWC", ov::op::v11::Interpolate::InterpolateMode::BICUBIC_PILLOW);
+        }
+    }
+
+    FluxPipeline(PipelineType pipeline_type, const std::filesystem::path& root_dir) : FluxPipeline(pipeline_type) {
         const std::filesystem::path model_index_path = root_dir / "model_index.json";
         std::ifstream file(model_index_path);
         OPENVINO_ASSERT(file.is_open(), "Failed to open ", model_index_path);
@@ -163,7 +174,7 @@ public:
                  const std::filesystem::path& root_dir,
                  const std::string& device,
                  const ov::AnyMap& properties)
-        : DiffusionPipeline(pipeline_type) {
+        : FluxPipeline(pipeline_type) {
         const std::filesystem::path model_index_path = root_dir / "model_index.json";
         std::ifstream file(model_index_path);
         OPENVINO_ASSERT(file.is_open(), "Failed to open ", model_index_path);
@@ -216,11 +227,11 @@ public:
                  const T5EncoderModel& t5_text_model,
                  const FluxTransformer2DModel& transformer,
                  const AutoencoderKL& vae)
-        : DiffusionPipeline(pipeline_type),
-          m_clip_text_encoder(std::make_shared<CLIPTextModel>(clip_text_model)),
-          m_t5_text_encoder(std::make_shared<T5EncoderModel>(t5_text_model)),
-          m_vae(std::make_shared<AutoencoderKL>(vae)),
-          m_transformer(std::make_shared<FluxTransformer2DModel>(transformer)) {
+        : FluxPipeline(pipeline_type) {
+        m_clip_text_encoder = std::make_shared<CLIPTextModel>(clip_text_model);
+        m_t5_text_encoder = std::make_shared<T5EncoderModel>(t5_text_model);
+        m_vae = std::make_shared<AutoencoderKL>(vae);
+        m_transformer = std::make_shared<FluxTransformer2DModel>(transformer);
         initialize_generation_config("FluxPipeline");
     }
 
@@ -271,8 +282,10 @@ public:
 
         const size_t num_channels_latents = m_transformer->get_config().in_channels / 4;
         const size_t vae_scale_factor = m_vae->get_vae_scale_factor();
-        size_t height = generation_config.height / vae_scale_factor;
-        size_t width = generation_config.width / vae_scale_factor;
+        // size_t height = (generation_config.height / vae_scale_factor);
+        // size_t width = (generation_config.width / vae_scale_factor);
+        size_t height = 2 * (generation_config.height / vae_scale_factor);
+        size_t width = 2 * (generation_config.width / vae_scale_factor);
 
         ov::Tensor latent_image_ids = prepare_latent_image_ids(generation_config.num_images_per_prompt, height / 2, width / 2);
 
@@ -291,24 +304,44 @@ public:
     std::tuple<ov::Tensor, ov::Tensor, ov::Tensor, ov::Tensor> prepare_latents(ov::Tensor initial_image, const ImageGenerationConfig& generation_config) const override {
         const size_t vae_scale_factor = m_vae->get_vae_scale_factor();
 
+        std::vector<float> timesteps = m_scheduler->get_float_timesteps();
+        OPENVINO_ASSERT(!timesteps.empty(), "Timesteps are not computed yet");
+        int64_t latent_timestep = timesteps.front();
+
         size_t num_channels_latents = m_transformer->get_config().in_channels / 4;
-        size_t height = generation_config.height / vae_scale_factor;
-        size_t width = generation_config.width / vae_scale_factor;
+        // size_t height = (generation_config.height / vae_scale_factor);
+        // size_t width = (generation_config.width / vae_scale_factor);
+        size_t height = 2 * (generation_config.height / vae_scale_factor);
+        size_t width = 2 * (generation_config.width / vae_scale_factor);
+
+        std::cout << "prepare_latents height " << height << std::endl;
+        std::cout << "generation_config.height " << generation_config.height << std::endl;
 
         ov::Shape latent_shape{generation_config.num_images_per_prompt,
                                num_channels_latents,
                                height,
                                width};
-        ov::Tensor latent(ov::element::f32, {}), proccesed_image, image_latent, noise;
+        ov::Tensor latent(ov::element::f32, {}), proccesed_image, image_latents, noise;
 
         if (initial_image) {
-            OPENVINO_THROW("StableDiffusion3 image to image is not implemented");
+            proccesed_image = m_image_resizer->execute(initial_image, generation_config.height, generation_config.width);
+            std::cout << "proccesed_image 1 " << proccesed_image.get_shape() << std::endl;
+            proccesed_image = m_image_processor->execute(proccesed_image);
+            std::cout << "proccesed_image 2 " << proccesed_image.get_shape() << std::endl;
+
+            image_latents = m_vae->encode(proccesed_image, generation_config.generator);
+
+            std::cout << "image_latents " << image_latents.get_shape() << std::endl;
+
+            noise = generation_config.generator->randn_tensor(latent_shape);
+            m_scheduler->scale_noise(image_latents, latent_timestep, noise);
         } else {
             noise = generation_config.generator->randn_tensor(latent_shape);
-            latent = pack_latents(noise, generation_config.num_images_per_prompt, num_channels_latents, height, width);
         }
 
-        return std::make_tuple(latent, proccesed_image, image_latent, noise);
+        latent = pack_latents(noise, generation_config.num_images_per_prompt, num_channels_latents, height, width);
+
+        return std::make_tuple(latent, proccesed_image, image_latents, noise);
     }
 
     void set_lora_adapters(std::optional<AdapterConfig> adapters) override {
@@ -345,7 +378,10 @@ public:
         std::tie(latents, processed_image, image_latent, noise) = prepare_latents(initial_image, m_custom_generation_config);
 
         size_t image_seq_len = latents.get_shape()[1];
-        float mu = m_scheduler->calculate_shift(image_seq_len);
+        // float mu = m_scheduler->calculate_shift(image_seq_len);
+        float mu = 1.15f;
+
+        std::cout << "mu: " << mu << std::endl;
 
         float linspace_end = 1.0f / m_custom_generation_config.num_inference_steps;
         std::vector<float> sigmas = numpy_utils::linspace<float>(1.0f, linspace_end, m_custom_generation_config.num_inference_steps, true);
@@ -476,6 +512,8 @@ private:
     std::shared_ptr<CLIPTextModel> m_clip_text_encoder = nullptr;
     std::shared_ptr<T5EncoderModel> m_t5_text_encoder = nullptr;
     std::shared_ptr<AutoencoderKL> m_vae = nullptr;
+    std::shared_ptr<IImageProcessor> m_image_processor = nullptr, m_mask_processor_rgb = nullptr, m_mask_processor_gray = nullptr;
+    std::shared_ptr<ImageResizer> m_image_resizer = nullptr, m_mask_resizer = nullptr;
     ImageGenerationConfig m_custom_generation_config;
 };
 

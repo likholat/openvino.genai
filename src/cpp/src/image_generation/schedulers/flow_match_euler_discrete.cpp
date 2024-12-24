@@ -146,6 +146,44 @@ void FlowMatchEulerDiscreteScheduler::add_noise(ov::Tensor init_latent, ov::Tens
     OPENVINO_THROW("Not implemented");
 }
 
+size_t FlowMatchEulerDiscreteScheduler::_index_for_timestep(float timestep) {
+    if (m_schedule_timesteps.empty()) {
+        m_schedule_timesteps = m_timesteps;
+    }
+
+    for (size_t i = 0; i < m_schedule_timesteps.size(); ++i) {
+        if (timestep == m_schedule_timesteps[i]) {
+            return i;
+        }
+    }
+
+    OPENVINO_THROW("Failed to find index for timestep ", timestep);
+}
+
+void FlowMatchEulerDiscreteScheduler::scale_noise(ov::Tensor sample, float timestep, ov::Tensor noise) {
+    size_t index_for_timestep;
+    if (m_begin_index == -1) {
+        index_for_timestep = _index_for_timestep(timestep);
+    } else if (m_step_index != -1) {
+        index_for_timestep = m_step_index;
+    } else {
+        index_for_timestep = m_begin_index;
+    }
+
+    std::cout << "sample " << sample.get_shape() << std::endl;
+    std::cout << "noise " << noise.get_shape() << std::endl;
+
+    const float sigma = m_sigmas[index_for_timestep];
+
+    float * sample_data = sample.data<float>();
+    const float * noise_data = noise.data<float>();
+
+    for (size_t i = 0; i < sample.get_size(); ++i) {
+        sample_data[i] = sigma * noise_data[i] + (1.0f - sigma) * sample_data[i];
+    }
+
+}
+
 void FlowMatchEulerDiscreteScheduler::set_timesteps_with_sigma(std::vector<float> sigma, float mu) {
     m_timesteps.clear();
     m_sigmas.clear();
