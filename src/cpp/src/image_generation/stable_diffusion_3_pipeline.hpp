@@ -444,9 +444,11 @@ public:
             proccesed_image = m_image_processor->execute(proccesed_image);
 
             image_latents = m_vae->encode(proccesed_image, generation_config.generator);
+            if (m_pipeline_type == PipelineType::INPAINTING) {
+                image_latents = numpy_utils::repeat(image_latents, generation_config.num_images_per_prompt);
+            }
 
             noise = generation_config.generator->randn_tensor(latent_shape);
-
             latent = ov::Tensor(image_latents.get_element_type(), image_latents.get_shape());
             image_latents.copy_to(latent);
             m_scheduler->scale_noise(latent, m_latent_timestep, noise);
@@ -462,6 +464,44 @@ public:
         }
 
         return std::make_tuple(latent, proccesed_image, image_latents, noise);
+    }
+
+    std::tuple<ov::Tensor, ov::Tensor> prepare_mask_latents(ov::Tensor mask_image, ov::Tensor processed_image, const ImageGenerationConfig& generation_config) {
+        OPENVINO_ASSERT(m_pipeline_type == PipelineType::INPAINTING, "'prepare_mask_latents' can be called for inpainting pipeline only");
+
+        const size_t batch_size_multiplier = do_classifier_free_guidance(generation_config.guidance_scale) ? 2 : 1;
+        const size_t vae_scale_factor = m_vae->get_vae_scale_factor();
+        ov::Shape target_shape = processed_image.get_shape();
+
+        ov::Tensor mask_condition = m_image_resizer->execute(mask_image, target_shape[2], target_shape[3]);
+        std::shared_ptr<IImageProcessor> mask_processor = mask_condition.get_shape()[3] == 1 ? m_mask_processor_gray : m_mask_processor_rgb;
+        mask_condition = mask_processor->execute(mask_condition);
+
+        // resize mask to shape of latent space
+        ov::Tensor mask = m_mask_resizer->execute(mask_condition, target_shape[2] / vae_scale_factor, target_shape[3] / vae_scale_factor);
+        mask = numpy_utils::repeat(mask, generation_config.num_images_per_prompt * batch_size_multiplier);
+
+        ov::Tensor masked_image_latent;
+
+        if (is_inpainting_model()) {
+            // create masked image
+            ov::Tensor masked_image(ov::element::f32, processed_image.get_shape());
+            const float * mask_condition_data = mask_condition.data<const float>();
+            const float * processed_image_data = processed_image.data<const float>();
+            float * masked_image_data = masked_image.data<float>();
+
+            for (size_t i = 0, plane_size = mask_condition.get_shape()[2] * mask_condition.get_shape()[3]; i < mask_condition.get_size(); ++i) {
+                masked_image_data[i + 0 * plane_size] = mask_condition_data[i] < 0.5f ? processed_image_data[i + 0 * plane_size] : 0.0f;
+                masked_image_data[i + 1 * plane_size] = mask_condition_data[i] < 0.5f ? processed_image_data[i + 1 * plane_size] : 0.0f;
+                masked_image_data[i + 2 * plane_size] = mask_condition_data[i] < 0.5f ? processed_image_data[i + 2 * plane_size] : 0.0f;
+            }
+
+            // encode masked image to latent scape
+            masked_image_latent = m_vae->encode(masked_image, generation_config.generator);
+            masked_image_latent = numpy_utils::repeat(masked_image_latent, generation_config.num_images_per_prompt * batch_size_multiplier);
+        }
+
+        return std::make_tuple(mask, masked_image_latent);
     }
 
     void set_lora_adapters(std::optional<AdapterConfig> adapters) override {
@@ -504,18 +544,24 @@ public:
         }
         m_latent_timestep = timesteps[0];
 
-        // 4 compute text encoders and set hidden states
+        // 4. Compute text encoders and set hidden states
         compute_hidden_states(positive_prompt, generation_config);
 
         // 5. Prepare latent variables
         ov::Tensor latent, processed_image, image_latent, noise;
         std::tie(latent, processed_image, image_latent, noise) = prepare_latents(initial_image, generation_config);
 
+        // 6. Prepare mask latents
+        ov::Tensor mask, masked_image_latent;
+        if (m_pipeline_type == PipelineType::INPAINTING) {
+            std::tie(mask, masked_image_latent) = prepare_mask_latents(mask_image, processed_image, generation_config);
+        }
+
         ov::Shape latent_shape_cfg = latent.get_shape();
         latent_shape_cfg[0] *= batch_size_multiplier;
         ov::Tensor latent_cfg(ov::element::f32, latent_shape_cfg);
 
-        // 6. Denoising loop
+        // 7. Denoising loop
         ov::Tensor noisy_residual_tensor(ov::element::f32, {});
 
         for (size_t inference_step = 0; inference_step < timesteps.size(); ++inference_step) {
@@ -553,6 +599,10 @@ public:
             auto scheduler_step_result = m_scheduler->step(noisy_residual_tensor, latent, inference_step, generation_config.generator);
             latent = scheduler_step_result["latent"];
 
+            if (m_pipeline_type == PipelineType::INPAINTING && !is_inpainting_model()) {
+                blend_latents(image_latent, noise, mask, latent, inference_step);
+            }
+
             if (callback && callback(inference_step, timesteps.size(), latent)) {
                 return ov::Tensor(ov::element::u8, {});
             }
@@ -570,6 +620,39 @@ private:
         assert(m_transformer != nullptr);
         assert(m_vae != nullptr);
         return m_transformer->get_config().in_channels == (m_vae->get_config().latent_channels * 2 + 1);
+    }
+
+    void blend_latents(ov::Tensor image_latent, ov::Tensor noise, ov::Tensor mask, ov::Tensor latent, size_t inference_step) {
+        OPENVINO_ASSERT(m_pipeline_type == PipelineType::INPAINTING, "'blend_latents' can be called for inpainting pipeline only");
+        OPENVINO_ASSERT(image_latent.get_shape() == latent.get_shape(), "Shapes for current", latent.get_shape(), "and initial image latents ", image_latent.get_shape(), " must match");
+
+        ov::Tensor noised_image_latent(image_latent.get_element_type(), {});
+
+        std::vector<float> timesteps = m_scheduler->get_float_timesteps();
+        if (inference_step < timesteps.size() - 1) {
+            image_latent.copy_to(noised_image_latent);
+
+            float noise_timestep = timesteps[inference_step + 1];
+            m_scheduler->scale_noise(noised_image_latent, noise_timestep, noise);
+        } else {
+            noised_image_latent = image_latent;
+        }
+
+        ov::Shape shape = image_latent.get_shape();
+        size_t batch_size = shape[0], in_channels = shape[1], channel_size = shape[2] * shape[3];
+        OPENVINO_ASSERT(batch_size == 1, "Batch size 1 is supported for now");
+
+        const float * mask_data = mask.data<const float>();
+        const float * noised_image_latent_data = noised_image_latent.data<const float>();
+        float * latent_data = latent.data<float>();
+
+        // blend initial noised and processed latents
+        for (size_t i = 0; i < channel_size; ++i) {
+            float mask_value = mask_data[i];
+            for (size_t j = 0; j < in_channels; ++j) {
+                latent_data[j * channel_size + i] = (1.0f - mask_value) * noised_image_latent_data[j * channel_size + i] + mask_value * latent_data[j * channel_size + i];
+            }
+        }
     }
 
     void compute_dim(int64_t & generation_config_value, ov::Tensor initial_image, int dim_idx) {
