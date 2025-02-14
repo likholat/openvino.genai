@@ -40,7 +40,7 @@ public:
          OPENVINO_THROW("Scheduler doesn't support int timesteps");
     }
 
-    virtual std::vector<float> get_float_timesteps() const {
+    virtual std::vector<float> get_float_timesteps() {
         OPENVINO_THROW("Scheduler doesn't support float timesteps");
     }
 

@@ -32,7 +32,7 @@ public:
 
     void set_timesteps_with_sigma(std::vector<float> sigma, float mu) override;
 
-    std::vector<float> get_float_timesteps() const override;
+    std::vector<float> get_float_timesteps() override;
 
     float get_init_noise_sigma() const override;
 
@@ -57,6 +57,7 @@ private:
     std::vector<float> m_timesteps, m_schedule_timesteps;
 
     float m_sigma_min, m_sigma_max;
+    float m_strength;
     size_t m_step_index, m_begin_index;
     size_t m_num_inference_steps;
 

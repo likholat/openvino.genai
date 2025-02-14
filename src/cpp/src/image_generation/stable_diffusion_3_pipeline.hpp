@@ -416,20 +416,6 @@ public:
         m_transformer->set_hidden_states("pooled_projections", pooled_prompt_embeds_inp);
     }
 
-    std::vector<float> get_timesteps(size_t num_inference_steps, float strength) {
-        float init_timestep = std::min(static_cast<float>(num_inference_steps) * strength, static_cast<float>(num_inference_steps));
-        size_t t_start = static_cast<size_t>(std::max(static_cast<float>(num_inference_steps) - init_timestep, 0.0f));
-
-        std::vector<float> timesteps, m_scheduler_timesteps = m_scheduler->get_float_timesteps();
-        for (size_t i = t_start; i < m_scheduler_timesteps.size(); ++i) {
-            timesteps.push_back(m_scheduler_timesteps[i]);
-        }
-
-        m_scheduler->set_begin_index(t_start);
-
-        return timesteps;
-    }
-
     std::tuple<ov::Tensor, ov::Tensor, ov::Tensor, ov::Tensor> prepare_latents(ov::Tensor initial_image, const ImageGenerationConfig& generation_config) const override {
         const size_t vae_scale_factor = m_vae->get_vae_scale_factor();
         ov::Shape latent_shape{generation_config.num_images_per_prompt,
@@ -536,12 +522,7 @@ public:
         // 3. Prepare timesteps
         m_scheduler->set_timesteps(generation_config.num_inference_steps, generation_config.strength);
 
-        std::vector<float> timesteps;
-        if (m_pipeline_type == PipelineType::TEXT_2_IMAGE) {
-            timesteps = m_scheduler->get_float_timesteps();
-        } else {
-            timesteps = get_timesteps(generation_config.num_inference_steps, generation_config.strength);
-        }
+        std::vector<float> timesteps = m_scheduler->get_float_timesteps();
         m_latent_timestep = timesteps[0];
 
         // 4. Compute text encoders and set hidden states
@@ -622,7 +603,7 @@ private:
         return m_transformer->get_config().in_channels == (m_vae->get_config().latent_channels * 2 + 1);
     }
 
-    void blend_latents(ov::Tensor image_latent, ov::Tensor noise, ov::Tensor mask, ov::Tensor latent, size_t inference_step) {
+    void blend_latents(ov::Tensor image_latent, ov::Tensor noise, ov::Tensor mask, ov::Tensor latent, size_t inference_step) override {
         OPENVINO_ASSERT(m_pipeline_type == PipelineType::INPAINTING, "'blend_latents' can be called for inpainting pipeline only");
         OPENVINO_ASSERT(image_latent.get_shape() == latent.get_shape(), "Shapes for current", latent.get_shape(), "and initial image latents ", image_latent.get_shape(), " must match");
 

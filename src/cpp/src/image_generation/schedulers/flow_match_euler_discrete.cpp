@@ -73,6 +73,7 @@ void FlowMatchEulerDiscreteScheduler::set_timesteps(size_t num_inference_steps, 
     m_sigmas.clear();
 
     m_num_inference_steps = num_inference_steps;
+    m_strength = strength;
     int32_t num_train_timesteps = m_config.num_train_timesteps;
     float shift = m_config.shift;
 
@@ -124,8 +125,18 @@ std::map<std::string, ov::Tensor> FlowMatchEulerDiscreteScheduler::step(ov::Tens
     return {{"latent", prev_sample}};
 }
 
-std::vector<float> FlowMatchEulerDiscreteScheduler::get_float_timesteps() const {
-    return m_timesteps;
+std::vector<float> FlowMatchEulerDiscreteScheduler::get_float_timesteps() {
+    // For Text2Image strength is always 1.0 (guaranteed by pipeline)
+    float init_timestep = std::min(static_cast<float>(m_num_inference_steps) * m_strength, static_cast<float>(m_num_inference_steps));
+    size_t t_start = static_cast<size_t>(std::max(static_cast<float>(m_num_inference_steps) - init_timestep, 0.0f));
+
+    std::vector<float> timesteps;
+    for (size_t i = t_start; i < m_timesteps.size(); ++i) {
+        timesteps.push_back(m_timesteps[i]);
+    }
+
+    set_begin_index(t_start);
+    return timesteps;
 }
 
 float FlowMatchEulerDiscreteScheduler::get_init_noise_sigma() const {

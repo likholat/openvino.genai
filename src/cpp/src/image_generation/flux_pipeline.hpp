@@ -304,20 +304,6 @@ public:
         m_transformer->set_hidden_states("img_ids", latent_image_ids);
     }
 
-    std::vector<float> get_timesteps(size_t num_inference_steps, float strength) {
-        float init_timestep = std::min(static_cast<float>(num_inference_steps) * strength, static_cast<float>(num_inference_steps));
-        size_t t_start = static_cast<size_t>(std::max(static_cast<float>(num_inference_steps) - init_timestep, 0.0f));
-
-        std::vector<float> timesteps, m_scheduler_timesteps = m_scheduler->get_float_timesteps();
-        for (size_t i = t_start; i < m_scheduler_timesteps.size(); ++i) {
-            timesteps.push_back(m_scheduler_timesteps[i]);
-        }
-
-        m_scheduler->set_begin_index(t_start);
-
-        return timesteps;
-    }
-
     std::tuple<ov::Tensor, ov::Tensor, ov::Tensor, ov::Tensor> prepare_latents(ov::Tensor initial_image, const ImageGenerationConfig& generation_config) const override {
         const size_t vae_scale_factor = m_vae->get_vae_scale_factor();
 
@@ -466,24 +452,21 @@ public:
         std::vector<float> sigmas = numpy_utils::linspace<float>(1.0f, linspace_end, m_custom_generation_config.num_inference_steps, true);
         m_scheduler->set_timesteps_with_sigma(sigmas, mu);
 
-        std::vector<float> timesteps;
-        if (m_pipeline_type == PipelineType::TEXT_2_IMAGE) {
-            timesteps = m_scheduler->get_float_timesteps();
-        } else {
-            timesteps = get_timesteps(m_custom_generation_config.num_inference_steps, m_custom_generation_config.strength);
-        }
+        // Prepare timesteps
+        std::vector<float> timesteps = m_scheduler->get_float_timesteps();
         m_latent_timestep = timesteps[0];
 
+        // Prepare latent variables
         ov::Tensor latents, processed_image, image_latent, noise;
         std::tie(latents, processed_image, image_latent, noise) = prepare_latents(initial_image, m_custom_generation_config);
 
-        // prepare mask latents
+        // Prepare mask latents
         ov::Tensor mask, masked_image_latent;
         if (m_pipeline_type == PipelineType::INPAINTING) {
             std::tie(mask, masked_image_latent) = prepare_mask_latents(mask_image, processed_image, m_custom_generation_config);
         }
 
-        // 6. Denoising loop
+        // Denoising loop
         ov::Tensor timestep(ov::element::f32, {1});
         float* timestep_data = timestep.data<float>();
 
