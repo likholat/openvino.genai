@@ -40,6 +40,9 @@
 #include "lora_common.hpp"
 #include "lora_names_mapping.hpp"
 
+#include "openvino/pass/constant_folding.hpp"
+
+
 extern "C" {
     #include "safetensors.h"
 }
@@ -120,6 +123,11 @@ struct AutoSafetensor: public safetensors_File {
 // The key in the map is a tensor name and the Constant uses a region of memory from the memory block.
 // Each Constant holds a shared pointer to the block in the runtime info.
 // The memory block will be deallocated when the last Constant is destroyed.
+
+bool is_in_set(size_t i) {
+    return (i % 4 == 0 || i % 4 == 1);
+}
+
 ConstantMap read_safetensors(const std::filesystem::path& filename) {
     auto buffer = read_file_helper(filename);
     AutoSafetensor safe_tensors_file{};
@@ -130,7 +138,10 @@ ConstantMap read_safetensors(const std::filesystem::path& filename) {
     );
 
     ConstantMap tensors;
-    for (int i = 0; i < safe_tensors_file.num_tensors; i++) {
+    for (int i = 2; i < 4; i++) {
+    // for (int i = 0; i < safe_tensors_file.num_tensors; i++) {
+
+        // if(!is_in_set(i)) {
         safetensors_TensorDescriptor tensor = safe_tensors_file.tensors[i];
         std::string name(tensor.name.ptr, tensor.name.ptr + tensor.name.len);
         ov::Shape shape(tensor.shape, tensor.shape + tensor.n_dimensions);
@@ -146,6 +157,7 @@ ConstantMap read_safetensors(const std::filesystem::path& filename) {
             std::make_shared<v0::Constant>(type, shape, ptr, nullptr);      // wraps existing memory, no ownership
         constant->get_rt_info()["__safetensors_buffer_holder"] = buffer;    // to automatically deallocate underlying memory buffer when last constant that holds it is destroyed
         tensors[name] = constant;
+    // }
     }
     return tensors;
 }
@@ -290,7 +302,6 @@ struct LoRAWeightGetterDefault {
         }
     }
 };
-
 
 
 // Maps a node in the base model to LoRA parameters object that describes how the LoRA tensors should be injected for that node.
@@ -450,9 +461,11 @@ struct LoRAWeightStateGetter {
 class LoRATransformBase : public ov::pass::MatcherPass {
 public:
 
+    ov::ResultVector& res_vec;
+
     OPENVINO_MATCHER_PASS_RTTI("LoRATransformBase");
 
-    LoRATransformBase(const LoRAWeightByNodeGetter& lora_weight_getter) {
+    LoRATransformBase(const LoRAWeightByNodeGetter& lora_weight_getter, ov::ResultVector& res_vec): res_vec(res_vec) {
         register_matcher(
             std::make_shared<ov::pass::pattern::Matcher>(ov::pass::pattern::wrap_type<v0::MatMul, v1::Convolution>(), this->get_type_info().name),
             ([lora_weight_getter, this](ov::pass::pattern::Matcher& m) {
@@ -493,10 +506,17 @@ private:
 
 // Builds LoRA subgraph that consists of several matrix and element-wise multiplications with optional data type conversions and reshapes
 // to build a consistent graph.
-NodePtr tensors_multiplication(NodePtr input, const NodeVector multipliers, ov::Output<ov::Node> target, bool transpose_weights, size_t alpha_pos, bool transpose_in_end) {
+NodePtr tensors_multiplication(NodePtr input, const NodeVector multipliers, ov::Output<ov::Node> target, bool transpose_weights, size_t alpha_pos, bool transpose_in_end, ov::ResultVector& res_vec) {
     const auto target_type = target.get_element_type();
     const auto target_shape = target.get_partial_shape();
     const auto target_rank = target_shape.rank().get_length();
+
+    auto my_inp = std::make_shared<v0::Result>(input, "MyInput");
+    my_inp->get_output_tensor(0).set_names({"MyInput"});
+    res_vec.push_back(my_inp);
+
+
+    std::cout << "!!!target_shape " << target_shape << std::endl;
     for(size_t i = 0; i < multipliers.size(); ++i) {
         NodePtr normalized = multipliers[i];
         if(normalized->get_output_element_type(0) != target_type) {
@@ -514,11 +534,33 @@ NodePtr tensors_multiplication(NodePtr input, const NodeVector multipliers, ov::
                 // TODO: Apply alpha multiplication separately
                 input = std::make_shared<v1::Multiply>(input, normalized);
             } else {
+                // ov::pass::Manager pm1;
+                // pm1.register_pass<ov::pass::ConstantFolding>();
+
+                std::cout << "@@@@ input shape " << input->get_output_partial_shape(0) << std::endl;
+                std::cout << "@@@@ normalized shape " << normalized->get_output_partial_shape(0) << std::endl;
+
                 input = std::make_shared<v0::MatMul>(input, normalized, /*transpose_a = */false, transpose_weights);  // FIXME: verify transpose_a == true
+
+                std::cout << "@@@@ result shape " << input->get_output_partial_shape(0) << std::endl;
+
+                // ov::ParameterVector param_vec;
+                // std::shared_ptr<ov::Model> tmp_model = std::make_shared<ov::Model>(input, param_vec);
+                // pm1.run_passes(tmp_model);
+
+                
+
+                // tmp_model.outputs(0);
+
+                // std::cout << "MatMul input " <<std::endl;
+                // float* out_data = ;
+                // for(int i = 0; i < )
+
             }
         } else {
             input = normalized;
         }
+
     }
 
     if(transpose_in_end) {
@@ -531,7 +573,19 @@ NodePtr tensors_multiplication(NodePtr input, const NodeVector multipliers, ov::
         input = unsqueeze(input, target_rank);
     }
 
+    auto lora_inp = std::make_shared<v0::Result>(input, "LoraInputForAdd");
+    lora_inp->get_output_tensor(0).set_names({"LoraInputForAdd"});
+    res_vec.push_back(lora_inp);
+
+    auto target_inp = std::make_shared<v0::Result>(target, "TragetInputForAdd");
+    target_inp->get_output_tensor(0).set_names({"TragetInputForAdd"});
+    res_vec.push_back(target_inp);
+
     input = std::make_shared<v1::Add>(target, input);
+
+    auto custom_out = std::make_shared<v0::Result>(input, "CustomOutput");
+    custom_out->get_output_tensor(0).set_names({"CustomOutput"});
+    res_vec.push_back(custom_out);
 
     return input;
 }
@@ -659,81 +713,82 @@ private:
 // TODO: This transformation unpacks potentially compressed to f16/bf16 weights to f32,
 // we should pack it back into the original precision to maintain the same weight size.
 // But it will work well if all plugins equally support fp-compressed weights and can unpack them on-line.
-class LoRAFuseTransform : public LoRATransformBase {
+// class LoRAFuseTransform : public LoRATransformBase {
 
-    InferRequestSignatureCache fusers;
+//     InferRequestSignatureCache fusers;
 
-    void signature_push_back(InferRequestSignatureCache::Signature& signature, ov::Output<ov::Node> input) const {
-        // TODO: Define hash function on vector<tuple<element_type, PartialShape>> to make it C++ish
-        signature += "(el: " + input.get_element_type().get_type_name() + ", shape: " + input.get_partial_shape().to_string() + ")";
-    }
+//     void signature_push_back(InferRequestSignatureCache::Signature& signature, ov::Output<ov::Node> input) const {
+//         // TODO: Define hash function on vector<tuple<element_type, PartialShape>> to make it C++ish
+//         signature += "(el: " + input.get_element_type().get_type_name() + ", shape: " + input.get_partial_shape().to_string() + ")";
+//     }
 
-public:
+// public:
 
-    OPENVINO_RTTI("LoRAFuseTransform", "genai", LoRATransformBase);
+//     OPENVINO_RTTI("LoRAFuseTransform", "genai", LoRATransformBase);
 
-    LoRAFuseTransform(const LoRAWeightByNodeGetter& lora_weight_getter, const std::string& device_for_fusion = "CPU") :
-        LoRATransformBase(lora_weight_getter),
-        fusers(device_for_fusion)
-    {}
+//     LoRAFuseTransform(const LoRAWeightByNodeGetter& lora_weight_getter, ov::ResultVector& res_vec, const std::string& device_for_fusion = "CPU") :
+//         LoRATransformBase(lora_weight_getter, res_vec),
+//         fusers(device_for_fusion)
+//     {}
 
-    bool apply (NodePtr node, const LoRANode& lora_weight) override {
-        auto weights_input = node->input_value(1);
-        auto weights_input_type = weights_input.get_element_type();
-        auto weights_convert = decompression_convert(weights_input.get_node_shared_ptr());
-        auto weights_constant = weights_convert ? weights_convert->input_value(0) : weights_input;
-        ConstantVector adapter = {
-            std::dynamic_pointer_cast<v0::Constant>(lora_weight.alpha),
-            std::dynamic_pointer_cast<v0::Constant>(lora_weight.B),
-            std::dynamic_pointer_cast<v0::Constant>(lora_weight.A)};
-        InferRequestSignatureCache::Signature signature;
-        signature_push_back(signature, weights_input);
-        for(auto multiplier : adapter) {
-            signature_push_back(signature, multiplier);
-        }
+//     bool apply (NodePtr node, const LoRANode& lora_weight) override {
+//         auto weights_input = node->input_value(1);
+//         auto weights_input_type = weights_input.get_element_type();
+//         auto weights_convert = decompression_convert(weights_input.get_node_shared_ptr());
+//         auto weights_constant = weights_convert ? weights_convert->input_value(0) : weights_input;
+//         ConstantVector adapter = {
+//             std::dynamic_pointer_cast<v0::Constant>(lora_weight.alpha),
+//             std::dynamic_pointer_cast<v0::Constant>(lora_weight.B),
+//             std::dynamic_pointer_cast<v0::Constant>(lora_weight.A)};
+//         InferRequestSignatureCache::Signature signature;
+//         signature_push_back(signature, weights_input);
+//         for(auto multiplier : adapter) {
+//             signature_push_back(signature, multiplier);
+//         }
 
-        // TODO: In case when compressed repacking of newly created weights is retained,
-        // replace weights_input by weigths_constant to keep decompression Convert in the model.
-        auto consumers = weights_input.get_target_inputs();
+//         // TODO: In case when compressed repacking of newly created weights is retained,
+//         // replace weights_input by weigths_constant to keep decompression Convert in the model.
+//         auto consumers = weights_input.get_target_inputs();
 
-        if(!fusers.exist(signature)) {
-            // Build a small model for weight and LoRA fusion, and stash it into `fusers` cache.
-            ov::ParameterVector parameters;
-            auto target_parameter = std::make_shared<v0::Parameter>(weights_constant.get_element_type(), weights_constant.get_partial_shape());
-            parameters.push_back(target_parameter);   // original weights input is one of the parameters
-            ov::Output<ov::Node> target = weights_convert ? weights_convert->clone_with_new_inputs({target_parameter}) : target_parameter;
-            for(auto multiplier : adapter) {
-                parameters.push_back(std::make_shared<v0::Parameter>(multiplier->get_output_element_type(0), multiplier->get_output_partial_shape(0)));
-            }
-            auto result = std::make_shared<v0::Result>(tensors_multiplication(nullptr, NodeVector{parameters.begin() + 1, parameters.end()}, target, false, 1, false));
-            ov::ResultVector results{result};
-            fusers.insert(signature, results, parameters);
-        }
+//         if(!fusers.exist(signature)) {
+//             // Build a small model for weight and LoRA fusion, and stash it into `fusers` cache.
+//             ov::ParameterVector parameters;
+//             auto target_parameter = std::make_shared<v0::Parameter>(weights_constant.get_element_type(), weights_constant.get_partial_shape());
+//             parameters.push_back(target_parameter);   // original weights input is one of the parameters
+//             ov::Output<ov::Node> target = weights_convert ? weights_convert->clone_with_new_inputs({target_parameter}) : target_parameter;
+//             for(auto multiplier : adapter) {
+//                 parameters.push_back(std::make_shared<v0::Parameter>(multiplier->get_output_element_type(0), multiplier->get_output_partial_shape(0)));
+//             }
+//         LoRASeparateTransform(const LoRAWeightByNodeGetter& lora_getter, ov::ResultVector& res_vec) : LoRATransformBase(lora_getter, res_vec) {
+//             auto result = std::make_shared<v0::Result>(tensors_multiplication(nullptr, NodeVector{parameters.begin() + 1, parameters.end()}, target, false, 1, false, res_vec));
+//             ov::ResultVector results{result};
+//             fusers.insert(signature, results, parameters);
+//         }
 
-        // Newly created constants in the next line are not mmaped unlike original weights, so it will inflate required memory
-        // eventually allocating up to 2x of the base model size.
-        // 2X is due to usually applied compression in the base model that is not retained in the current version of this code.
-        // But even if the compression is used, then still a copy of all weights that affected by the LoRA adapters are allocated in memory.
-        // FIXME: Provide a way for postponed weight repacking that will be triggered by the plugin in compile_model call for the base model.
-        // Constant sub-expression can be a solution, but it requires improvements inside plugins, because currently it works extremely slow.
-        auto replacement_const = std::make_shared<v0::Constant>(weights_input.get_element_type(), weights_input.get_shape());
+//         // Newly created constants in the next line are not mmaped unlike original weights, so it will inflate required memory
+//         // eventually allocating up to 2x of the base model size.
+//         // 2X is due to usually applied compression in the base model that is not retained in the current version of this code.
+//         // But even if the compression is used, then still a copy of all weights that affected by the LoRA adapters are allocated in memory.
+//         // FIXME: Provide a way for postponed weight repacking that will be triggered by the plugin in compile_model call for the base model.
+//         // Constant sub-expression can be a solution, but it requires improvements inside plugins, because currently it works extremely slow.
+//         auto replacement_const = std::make_shared<v0::Constant>(weights_input.get_element_type(), weights_input.get_shape());
 
-        ov::TensorVector outputs{replacement_const->get_tensor_view()};
-        // set input constants
-        ov::TensorVector inputs;
-        inputs.reserve(1 + adapter.size());
-        inputs.push_back(std::dynamic_pointer_cast<v0::Constant>(weights_constant.get_node_shared_ptr())->get_tensor_view());
-        for(size_t i = 0; i < adapter.size(); ++i) {
-            inputs.push_back(adapter[i]->get_tensor_view());
-        }
-        fusers.evaluate(signature, inputs, outputs);
+//         ov::TensorVector outputs{replacement_const->get_tensor_view()};
+//         // set input constants
+//         ov::TensorVector inputs;
+//         inputs.reserve(1 + adapter.size());
+//         inputs.push_back(std::dynamic_pointer_cast<v0::Constant>(weights_constant.get_node_shared_ptr())->get_tensor_view());
+//         for(size_t i = 0; i < adapter.size(); ++i) {
+//             inputs.push_back(adapter[i]->get_tensor_view());
+//         }
+//         fusers.evaluate(signature, inputs, outputs);
 
-        for (auto consumer : consumers) {
-            consumer.replace_source_output(replacement_const->output(0));
-        }
-        return true;
-    }
-};
+//         for (auto consumer : consumers) {
+//             consumer.replace_source_output(replacement_const->output(0));
+//         }
+//         return true;
+//     }
+// };
 
 
 // Transformation that modifies the base model inserting new nodes that do LoRA matrix multiplications alongside with the original MatMul/Convolution.
@@ -742,9 +797,11 @@ public:
 
     OPENVINO_RTTI("LoRASeparateTransform", "genai", LoRATransformBase);
 
-    LoRASeparateTransform(const LoRAWeightByNodeGetter& lora_getter) : LoRATransformBase(lora_getter) {}
+    LoRASeparateTransform(const LoRAWeightByNodeGetter& lora_getter, ov::ResultVector& res_vec) : LoRATransformBase(lora_getter, res_vec){};
 
     bool apply (NodePtr node, const LoRANode& lora_weight) override {
+
+        // std::cout << "node name " << node->get_friendly_name() << std::endl;
         auto activations = node->input_value(0);    // FIXME: consider MatMul.transpose_a
         auto weights_input = node->input_value(1);
         auto weights_input_type = weights_input.get_element_type();
@@ -758,7 +815,7 @@ public:
         bool transpose_in_end = false;
 
         // FIXME: Should check rank of activations instead of target rank
-        if(target_rank == 4 && target.get_partial_shape()[target_rank - 3].get_length() > 1) {
+        if(target_rank == 4) {
             // FIXME: Check the dimensions we really need to move, currently it is hardcoded 2 + 2 dimensions
             // FIXME: Stash transposition constant to reuse
             auto transposition = v0::Constant::create(ov::element::i32, ov::Shape{4}, std::vector<int>{2, 3, 0, 1});
@@ -768,12 +825,14 @@ public:
         }
 
         NodeVector lora_variables{lora_weight.A, lora_weight.alpha, lora_weight.B};
-        replacement = tensors_multiplication(activations.get_node_shared_ptr(), lora_variables, target, true, 1, transpose_in_end);
+        replacement = tensors_multiplication(activations.get_node_shared_ptr(), lora_variables, target, true, 1, transpose_in_end, res_vec);
 
         replacement->get_output_tensor(0).add_names(target.get_names());
+        std::cout << "replacement name " <<replacement->get_output_tensor(0).get_any_name() << std::endl;
         for (auto consumer : consumers) {
             consumer.replace_source_output(replacement->output(0));
         }
+        // std::cout << "replacement done" << std::endl;
 
         return true;
     }
@@ -961,6 +1020,7 @@ struct AdapterControllerImpl {
             }
         }
 
+
         auto weight_as_constant = [&, this](NodePtr node) -> std::optional<LoRANode> {
             // FIXME: lora_placeholder is for passing element type only
             LoRAParts<ov::Tensor> lora_placeholder{
@@ -969,8 +1029,28 @@ struct AdapterControllerImpl {
                 ov::Tensor(params_getter.type, ov::Shape{0})
             };
             auto name = node->get_friendly_name();
+
             auto lora_weight = prepare_lora_tensors(name, params_getter.weight_getter, lora_placeholder, /*set_empty_tensors=*/false, /*alpha_only=*/false);
+            
             if(lora_weight.alpha) {
+                auto alpha_data = lora_weight.alpha.data<float>();
+                for (int i = 0; i < ov::shape_size(lora_weight.alpha.get_shape()); ++i) {
+                    std::cout << static_cast<float>(alpha_data[i]) << " ";
+                }
+                std::cout << std::endl;
+
+                auto A_data = lora_weight.A.data<float>();
+                for (int i = 0; i < std::min(ov::shape_size(lora_weight.A.get_shape()), size_t(10)); ++i) {
+                    std::cout << static_cast<float>(A_data[i]) << " ";
+                }
+                std::cout << std::endl;
+
+                auto B_data = lora_weight.A.data<float>();
+                for (int i = 0; i < std::min(ov::shape_size(lora_weight.B.get_shape()), size_t(10)); ++i) {
+                    std::cout << static_cast<float>(B_data[i]) << " ";
+                }
+                std::cout << std::endl;
+
                 return LoRANode(
                     // TODO: Make sure that tensors will not be disposed during constant life time
                     std::make_shared<v0::Constant>(lora_weight.alpha),
@@ -982,23 +1062,27 @@ struct AdapterControllerImpl {
             }
         };
 
+        ov::ResultVector res_vec;
+
         ov::pass::Manager pm;
         auto mode = current_config.get_mode();
         if(mode == AdapterConfig::MODE_DYNAMIC || mode == AdapterConfig::MODE_STATIC_RANK || mode == AdapterConfig::MODE_AUTO) {
             // State mode
             params_getter.dynamic_lora_rank = (mode != AdapterConfig::MODE_STATIC_RANK);
-            pm.register_pass<LoRASeparateTransform>(LoRAWeightStateGetter(params_getter, model, variable_ids));
+            pm.register_pass<LoRASeparateTransform>(LoRAWeightStateGetter(params_getter, model, variable_ids), res_vec);
         } else if(mode == AdapterConfig::MODE_STATIC) {
             // Separate constant mode
-            pm.register_pass<LoRASeparateTransform>(weight_as_constant);
+            pm.register_pass<LoRASeparateTransform>(weight_as_constant, res_vec);
         } else if(mode == AdapterConfig::MODE_FUSE) {
             // Fuse mode
-            pm.register_pass<LoRAFuseTransform>(weight_as_constant);
+            // pm.register_pass<LoRAFuseTransform>(weight_as_constant, res_vec);
         } else {
             OPENVINO_THROW("Unrecognized AdapterConfig::Mode was used: ", mode);
         }
 
         pm.run_passes(model);
+
+        model->add_results(res_vec);
 
         // Collect all variable names to quickly detect which state tensor belongs to this adapter controller later
         for(const auto& var: variable_ids) {
@@ -1209,7 +1293,7 @@ struct AdapterControllerImpl {
         ov::OutputVector concat_inputs;
         concat_inputs.reserve(inputs.size());
         for(size_t i = 0; i < inputs.size(); ++i) {
-            NodePtr input = parameters[(alpha_only ? 1 : 3)*i + offset] = input_accessor(inputs[i]);
+            NodePtr input = parameters[(alpha_only ? 1 : 3) *i + offset] = input_accessor(inputs[i]);
             if(input->get_output_element_type(0) != output.get_element_type()) {
                 input = std::make_shared<v0::Convert>(input, output.get_element_type());
             }

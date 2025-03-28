@@ -15,7 +15,8 @@ int main(int argc, char* argv[]) try {
     using namespace ov::genai;
 
     Adapter adapter(adapter_path);
-    LLMPipeline pipe(models_path, device, adapters(adapter));    // register all required adapters here
+    LLMPipeline pipe(models_path, device, adapters(adapter, 0.75, AdapterConfig::MODE_STATIC));    // register all required adapters here
+    // LLMPipeline pipe(models_path, device, adapters(adapter));
 
     // Resetting config to set greedy behaviour ignoring generation config from model directory.
     // It helps to compare two generations with and without LoRA adapter.
@@ -23,12 +24,12 @@ int main(int argc, char* argv[]) try {
     config.max_new_tokens = 100;
     pipe.set_generation_config(config);
 
-    std::cout << "Generate with LoRA adapter and alpha set to 0.75:" << std::endl;
+    // std::cout << "Generate with LoRA adapter and alpha set to 0.75:" << std::endl;
     std::cout << pipe.generate(prompt, max_new_tokens(100), adapters(adapter, 0.75)) << std::endl;
 
-    std::cout << "\n-----------------------------";
-    std::cout << "\nGenerate without LoRA adapter:" << std::endl;
-    std::cout << pipe.generate(prompt, max_new_tokens(100), adapters()) << std::endl;
+    // std::cout << "\n-----------------------------";
+    // std::cout << "\nGenerate without LoRA adapter:" << std::endl;
+    // std::cout << pipe.generate(prompt, max_new_tokens(100), adapters()) << std::endl;
 
 } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';

@@ -293,6 +293,8 @@ public:
         // print_tensor("block_indices_begins", block_indices_begins);
         // print_tensor("max_context_len", max_context_len);
 
+
+
         {
             static ManualTimer timer("pure generate inference");
             timer.start();
@@ -306,7 +308,14 @@ public:
 
         _reset_cache_rotation_coefficients();
 
+        print_tensor("MyInput",  m_request.get_tensor("MyInput"));
+        print_tensor("LoraInputForAdd",  m_request.get_tensor("LoraInputForAdd"));
+        print_tensor("TragetInputForAdd",  m_request.get_tensor("TragetInputForAdd"));
+        print_tensor("CustomOutput",  m_request.get_tensor("CustomOutput"));
+
         // return logits
+        // std::cout << "INTERMEDIATE TENSOR" << std::endl;
+        // print_tensor("INTERMEDIATE TENSOR", m_request.get_tensor("333"));
         return m_request.get_tensor("logits");
     }
 
