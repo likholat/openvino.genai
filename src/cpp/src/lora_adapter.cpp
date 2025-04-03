@@ -33,8 +33,10 @@
 #include "openvino/pass/pattern/op/wrap_type.hpp"
 #include "openvino/pass/graph_rewrite.hpp"
 #include "openvino/pass/manager.hpp"
+#include "openvino/pass/serialize.hpp"
 
 #include "openvino/genai/lora_adapter.hpp"
+#include "debug_utils.hpp"
 
 #include "utils.hpp"
 #include "lora_common.hpp"
@@ -124,6 +126,8 @@ struct AutoSafetensor: public safetensors_File {
 // Each Constant holds a shared pointer to the block in the runtime info.
 // The memory block will be deallocated when the last Constant is destroyed.
 
+
+// good idxs are in this set
 bool is_in_set(size_t i) {
     return (i % 4 == 0 || i % 4 == 1);
 }
@@ -137,27 +141,46 @@ ConstantMap read_safetensors(const std::filesystem::path& filename) {
         "Cannot parse ", filename, " as a Safetensors file format. Safetensors file format is supported only"
     );
 
+    // std::vector bad_loras = {2, 3, 6, 7, 50, 51, 22, 23, 14, 15, 82, 83};
+
+    // std::vector bad_loras = {2, 3, 6, 7, 14, 15, 22, 23, 50, 51, 82, 83};
+
     ConstantMap tensors;
-    for (int i = 2; i < 4; i++) {
+    for (int i = 0; i < 4; i++) {
     // for (int i = 0; i < safe_tensors_file.num_tensors; i++) {
-
         // if(!is_in_set(i)) {
-        safetensors_TensorDescriptor tensor = safe_tensors_file.tensors[i];
-        std::string name(tensor.name.ptr, tensor.name.ptr + tensor.name.len);
-        ov::Shape shape(tensor.shape, tensor.shape + tensor.n_dimensions);
-        void* ptr = tensor.ptr;     // FIXME: needs a non-constant pointer because Tensor doesn't accept a constant pointer
+            std::cout << "LoRA index " << i << std::endl;
+            safetensors_TensorDescriptor tensor = safe_tensors_file.tensors[i];
+            std::string name(tensor.name.ptr, tensor.name.ptr + tensor.name.len);
+            ov::Shape shape(tensor.shape, tensor.shape + tensor.n_dimensions);
+            std::cout << "LoRA Shape " << shape << std::endl;
+            void* ptr = tensor.ptr;     // FIXME: needs a non-constant pointer because Tensor doesn't accept a constant pointer
 
-        OPENVINO_ASSERT(
-            ov::shape_size(shape) <= tensor.end_offset_bytes - tensor.begin_offset_bytes,
-            "Tensor shape ", ov::shape_size(shape), " for tensor \"", name, "\" from Safetensors file \"", filename, "\" doesn't match the expected tensor size ",
-            tensor.end_offset_bytes - tensor.begin_offset_bytes);
+            // if (std::find(bad_loras.begin(), bad_loras.end(), i) != bad_loras.end()) {
+            //     // std::cout << "BAD LoRA" << " ";
+            //     // for (int i = 0; i < std::accumulate(shape.begin(), shape.end(), 1.0, std::multiplies<size_t>()); ++i)
+            //     //     std::cout << static_cast<float*>(ptr)[i] << " ";
+            //     // std::cout << std::endl;
+                
+            //     continue;
+            // } else {
+            //     // std::cout << "Good LoRA" << " ";
+            //     // for (int i = 0; i < 10; ++i)
+            //     //     std::cout << static_cast<float*>(ptr)[i] << " ";
+            //     // std::cout << std::endl;
+            // }
 
-        auto type = safetensors_to_ov_element_type(tensor.dtype);
-        auto constant =
-            std::make_shared<v0::Constant>(type, shape, ptr, nullptr);      // wraps existing memory, no ownership
-        constant->get_rt_info()["__safetensors_buffer_holder"] = buffer;    // to automatically deallocate underlying memory buffer when last constant that holds it is destroyed
-        tensors[name] = constant;
-    // }
+            OPENVINO_ASSERT(
+                ov::shape_size(shape) <= tensor.end_offset_bytes - tensor.begin_offset_bytes,
+                "Tensor shape ", ov::shape_size(shape), " for tensor \"", name, "\" from Safetensors file \"", filename, "\" doesn't match the expected tensor size ",
+                tensor.end_offset_bytes - tensor.begin_offset_bytes);
+
+            auto type = safetensors_to_ov_element_type(tensor.dtype);
+            auto constant =
+                std::make_shared<v0::Constant>(type, shape, ptr, nullptr);      // wraps existing memory, no ownership
+            constant->get_rt_info()["__safetensors_buffer_holder"] = buffer;    // to automatically deallocate underlying memory buffer when last constant that holds it is destroyed
+            tensors[name] = constant;
+        // }
     }
     return tensors;
 }
@@ -537,12 +560,12 @@ NodePtr tensors_multiplication(NodePtr input, const NodeVector multipliers, ov::
                 // ov::pass::Manager pm1;
                 // pm1.register_pass<ov::pass::ConstantFolding>();
 
-                std::cout << "@@@@ input shape " << input->get_output_partial_shape(0) << std::endl;
-                std::cout << "@@@@ normalized shape " << normalized->get_output_partial_shape(0) << std::endl;
+                // std::cout << "@@@@ input shape " << input->get_output_partial_shape(0) << std::endl;
+                // std::cout << "@@@@ normalized shape " << normalized->get_output_partial_shape(0) << std::endl;
 
                 input = std::make_shared<v0::MatMul>(input, normalized, /*transpose_a = */false, transpose_weights);  // FIXME: verify transpose_a == true
 
-                std::cout << "@@@@ result shape " << input->get_output_partial_shape(0) << std::endl;
+                // std::cout << "@@@@ result shape " << input->get_output_partial_shape(0) << std::endl;
 
                 // ov::ParameterVector param_vec;
                 // std::shared_ptr<ov::Model> tmp_model = std::make_shared<ov::Model>(input, param_vec);
@@ -801,7 +824,7 @@ public:
 
     bool apply (NodePtr node, const LoRANode& lora_weight) override {
 
-        // std::cout << "node name " << node->get_friendly_name() << std::endl;
+        std::cout << "node name " << node->get_friendly_name() << std::endl;
         auto activations = node->input_value(0);    // FIXME: consider MatMul.transpose_a
         auto weights_input = node->input_value(1);
         auto weights_input_type = weights_input.get_element_type();
@@ -1033,23 +1056,23 @@ struct AdapterControllerImpl {
             auto lora_weight = prepare_lora_tensors(name, params_getter.weight_getter, lora_placeholder, /*set_empty_tensors=*/false, /*alpha_only=*/false);
             
             if(lora_weight.alpha) {
-                auto alpha_data = lora_weight.alpha.data<float>();
-                for (int i = 0; i < ov::shape_size(lora_weight.alpha.get_shape()); ++i) {
-                    std::cout << static_cast<float>(alpha_data[i]) << " ";
-                }
-                std::cout << std::endl;
+                // auto alpha_data = lora_weight.alpha.data<float>();
+                // for (int i = 0; i < ov::shape_size(lora_weight.alpha.get_shape()); ++i) {
+                //     std::cout << static_cast<float>(alpha_data[i]) << " ";
+                // }
+                // std::cout << std::endl;
 
-                auto A_data = lora_weight.A.data<float>();
-                for (int i = 0; i < std::min(ov::shape_size(lora_weight.A.get_shape()), size_t(10)); ++i) {
-                    std::cout << static_cast<float>(A_data[i]) << " ";
-                }
-                std::cout << std::endl;
+                // auto A_data = lora_weight.A.data<float>();
+                // for (int i = 0; i < std::min(ov::shape_size(lora_weight.A.get_shape()), size_t(10)); ++i) {
+                //     std::cout << static_cast<float>(A_data[i]) << " ";
+                // }
+                // std::cout << std::endl;
 
-                auto B_data = lora_weight.A.data<float>();
-                for (int i = 0; i < std::min(ov::shape_size(lora_weight.B.get_shape()), size_t(10)); ++i) {
-                    std::cout << static_cast<float>(B_data[i]) << " ";
-                }
-                std::cout << std::endl;
+                // auto B_data = lora_weight.A.data<float>();
+                // for (int i = 0; i < std::min(ov::shape_size(lora_weight.B.get_shape()), size_t(10)); ++i) {
+                //     std::cout << static_cast<float>(B_data[i]) << " ";
+                // }
+                // std::cout << std::endl;
 
                 return LoRANode(
                     // TODO: Make sure that tensors will not be disposed during constant life time
@@ -1082,6 +1105,7 @@ struct AdapterControllerImpl {
 
         pm.run_passes(model);
 
+
         model->add_results(res_vec);
 
         // Collect all variable names to quickly detect which state tensor belongs to this adapter controller later
@@ -1090,6 +1114,14 @@ struct AdapterControllerImpl {
             variable_names.insert(var.second.B.variable_id);
             variable_names.insert(var.second.alpha.variable_id);
         }
+
+        std::string output_name = "../../../llm_models/lora_ov/lora_graph";
+        std::string out_xml_path = output_name + ".xml";
+        std::string out_bin_path = output_name + ".bin";
+
+        ov::pass::Manager pm2;
+        pm2.register_pass<ov::pass::Serialize>(out_xml_path, out_bin_path);
+        pm2.run_passes(model);
     }
 
     static std::shared_ptr<AdapterImpl> get_adapter_impl(const Adapter& adapter) {

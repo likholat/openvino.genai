@@ -308,10 +308,10 @@ public:
 
         _reset_cache_rotation_coefficients();
 
-        print_tensor("MyInput",  m_request.get_tensor("MyInput"));
-        print_tensor("LoraInputForAdd",  m_request.get_tensor("LoraInputForAdd"));
-        print_tensor("TragetInputForAdd",  m_request.get_tensor("TragetInputForAdd"));
-        print_tensor("CustomOutput",  m_request.get_tensor("CustomOutput"));
+        // print_tensor("MyInput",  m_request.get_tensor("MyInput"));
+        // print_tensor("LoraInputForAdd",  m_request.get_tensor("LoraInputForAdd"));
+        // print_tensor("TragetInputForAdd",  m_request.get_tensor("TragetInputForAdd"));
+        // print_tensor("CustomOutput",  m_request.get_tensor("CustomOutput"));
 
         // return logits
         // std::cout << "INTERMEDIATE TENSOR" << std::endl;
