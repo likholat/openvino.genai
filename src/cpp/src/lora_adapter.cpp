@@ -16,6 +16,7 @@
 #include <memory>
 #include <cmath>
 
+#include "openvino/op/divide.hpp"
 #include "openvino/op/add.hpp"
 #include "openvino/op/multiply.hpp"
 #include "openvino/op/matmul.hpp"
@@ -160,10 +161,35 @@ LoRAPartsParser default_lora_patterns () {
     );
 }
 
+// size_t calculate_lora_rank(const LoRATensors& weights) {
+//     const auto& lora_tensor = weights.at(0);
+//     OPENVINO_ASSERT(lora_tensor.second.A && lora_tensor.second.B, "Either A, B or both matrices are missing in LoRA tensors for layer: ", lora_tensor.first);
+
+//         const auto& A_shape = lora_tensor.second.A->output(0).get_partial_shape();
+//         const auto& B_shape = item.second.B->output(0).get_partial_shape();
+
+//         if (A_shape[0].is_static() && B_shape[1].is_static()) {
+//             size_t rank_A = A_shape[0].get_length();
+//             size_t rank_B = B_shape[1].get_length();
+
+//             if (rank_A == rank_B) {
+//                 return rank_A;  
+//             }
+//         } else {
+//             } else {
+//             DEBUG_PRINT("Could not compute LoRA rank. LoRA rank is set to 1.0.");
+//         }
+//     }
+
+//     return 1; // if can't calculate the rank, then divide by 1
+// }
 
 // Group tensors loaded from LoRA adapter file into triads A, B and alpha grouped by layer names.
 LoRATensors group_lora_tensors(const ConstantMap& tensors, const LoRAPartsParser& parts_parser) {
     LoRATensors result;
+
+    std::cout << "group_lora_tensors" << std::endl;
+
     for(const auto& named_tensor: tensors) {
         if(auto parsed = parts_parser.A(named_tensor.first)) {
             result[*parsed].A = named_tensor.second;
@@ -176,10 +202,29 @@ LoRATensors group_lora_tensors(const ConstantMap& tensors, const LoRAPartsParser
         }
     }
 
-    // Check that A and B exist for each LoRA entry
-    for(const auto& lora_tensor: result) {
+    // Check that A and B exist for each LoRA entry and set the LoRA rank
+    for (auto& lora_tensor : result) {
         OPENVINO_ASSERT(lora_tensor.second.A && lora_tensor.second.B, "Either A, B or both matrices are missing in LoRA tensors for layer: ", lora_tensor.first);
+
+        const auto& A_shape = lora_tensor.second.A->output(0).get_partial_shape();
+        const auto& B_shape = lora_tensor.second.B->output(0).get_partial_shape();
+
+        if (A_shape[0].is_static() && B_shape[1].is_static()) {
+            size_t rank_A = A_shape[0].get_length();
+            size_t rank_B = B_shape[1].get_length();
+
+            if (rank_A == rank_B) {
+                lora_tensor.second.rank = ov::op::v0::Constant::create(ov::element::f32, {1}, {static_cast<float>(rank_A)});
+            } else {
+                DEBUG_PRINT("Could not compute LoRA rank for layer \"" << lora_tensor.first << "\" because the ranks of the tensors do not match. LoRA rank is set to 1.0.");
+                lora_tensor.second.rank = ov::op::v0::Constant::create(ov::element::f32, {1}, {1.0});
+            }
+        } else {
+            DEBUG_PRINT("Could not compute LoRA rank for layer \"" << lora_tensor.first << "\" because tensors aren't static. LoRA rank is set to 1.0.");
+            lora_tensor.second.rank = ov::op::v0::Constant::create(ov::element::f32, {1}, {1.0});
+        }
     }
+
     return result;
 }
 
@@ -459,6 +504,7 @@ public:
                 auto node = m.get_match_root();
                 try {
                     if(auto lora_weight = lora_weight_getter(node)) {
+                        std::cout << "LoRATransformBase" << std::endl;
                         if(apply(node, *lora_weight)) {
                             ++applied; // FIXME: For debugging purposes only
                             return true;
@@ -493,10 +539,26 @@ private:
 
 // Builds LoRA subgraph that consists of several matrix and element-wise multiplications with optional data type conversions and reshapes
 // to build a consistent graph.
-NodePtr tensors_multiplication(NodePtr input, const NodeVector multipliers, ov::Output<ov::Node> target, bool transpose_weights, size_t alpha_pos, bool transpose_in_end) {
+NodePtr create_lora_graph(NodePtr input,
+                          const std::shared_ptr<ov::Node> tensor_A,
+                          const std::shared_ptr<ov::Node> tensor_B,
+                          const std::shared_ptr<ov::Node> alpha,
+                          const std::shared_ptr<ov::Node> lora_rank,
+                          ov::Output<ov::Node> target,
+                          bool transpose_weights,
+                          bool transpose_in_end) {
     const auto target_type = target.get_element_type();
     const auto target_shape = target.get_partial_shape();
     const auto target_rank = target_shape.rank().get_length();
+
+    NodeVector multipliers = {tensor_A, alpha, tensor_B};
+    const size_t alpha_pos = 1;
+
+    NodePtr lora_rank_converted = lora_rank;
+    if(lora_rank_converted->get_output_element_type(0) != target_type) {
+        lora_rank_converted = std::make_shared<v0::Convert>(lora_rank_converted, target_type);
+    }
+
     for(size_t i = 0; i < multipliers.size(); ++i) {
         NodePtr normalized = multipliers[i];
         if(normalized->get_output_element_type(0) != target_type) {
@@ -511,6 +573,10 @@ NodePtr tensors_multiplication(NodePtr input, const NodeVector multipliers, ov::
         }
         if(input) {
             if(i == alpha_pos) {
+                // to align with PEFT:self.scaling[active_adapter] = self.lora_alpha[active_adapter] / self.r[active_adapter]
+                // std::cout << "target_type " << std::endl;
+                // normalized = std::make_shared<v1::Divide>(normalized, lora_rank_converted);
+
                 // TODO: Apply alpha multiplication separately
                 input = std::make_shared<v1::Multiply>(input, normalized);
             } else {
@@ -678,6 +744,7 @@ public:
     {}
 
     bool apply (NodePtr node, const LoRANode& lora_weight) override {
+        std::cout << "LoRAFuseTransform apply" << std::endl;
         auto weights_input = node->input_value(1);
         auto weights_input_type = weights_input.get_element_type();
         auto weights_convert = decompression_convert(weights_input.get_node_shared_ptr());
@@ -685,7 +752,8 @@ public:
         ConstantVector adapter = {
             std::dynamic_pointer_cast<v0::Constant>(lora_weight.alpha),
             std::dynamic_pointer_cast<v0::Constant>(lora_weight.B),
-            std::dynamic_pointer_cast<v0::Constant>(lora_weight.A)};
+            std::dynamic_pointer_cast<v0::Constant>(lora_weight.A),
+            std::dynamic_pointer_cast<v0::Constant>(lora_weight.rank)};
         InferRequestSignatureCache::Signature signature;
         signature_push_back(signature, weights_input);
         for(auto multiplier : adapter) {
@@ -705,7 +773,15 @@ public:
             for(auto multiplier : adapter) {
                 parameters.push_back(std::make_shared<v0::Parameter>(multiplier->get_output_element_type(0), multiplier->get_output_partial_shape(0)));
             }
-            auto result = std::make_shared<v0::Result>(tensors_multiplication(nullptr, NodeVector{parameters.begin() + 1, parameters.end()}, target, false, 1, false));
+            auto result = std::make_shared<v0::Result>(create_lora_graph(nullptr,        // input
+                                                                         parameters[3],  // A
+                                                                         parameters[2],  // B
+                                                                         parameters[1],  // alpha
+                                                                         parameters[4],  // lora_rank
+                                                                         target,
+                                                                         false,  // transpose_weights
+                                                                         false   // transpose_in_end
+                                                                         ));
             ov::ResultVector results{result};
             fusers.insert(signature, results, parameters);
         }
@@ -745,6 +821,7 @@ public:
     LoRASeparateTransform(const LoRAWeightByNodeGetter& lora_getter) : LoRATransformBase(lora_getter) {}
 
     bool apply (NodePtr node, const LoRANode& lora_weight) override {
+        std::cout << "LoRASeparateTransform apply" << std::endl;
         auto activations = node->input_value(0);    // FIXME: consider MatMul.transpose_a
         auto weights_input = node->input_value(1);
         auto weights_input_type = weights_input.get_element_type();
@@ -767,8 +844,17 @@ public:
             transpose_in_end = true;
         }
 
-        NodeVector lora_variables{lora_weight.A, lora_weight.alpha, lora_weight.B};
-        replacement = tensors_multiplication(activations.get_node_shared_ptr(), lora_variables, target, true, 1, transpose_in_end);
+        // std::cout << "lora_weight.rank " << lora_weight.rank << std::endl;
+
+        // NodeVector lora_variables{lora_weight.A, lora_weight.alpha, lora_weight.B};
+        replacement = create_lora_graph(activations.get_node_shared_ptr(),
+                                        lora_weight.A,
+                                        lora_weight.B,
+                                        lora_weight.alpha,
+                                        lora_weight.rank,
+                                        target,
+                                        true,
+                                        transpose_in_end);
 
         replacement->get_output_tensor(0).add_names(target.get_names());
         for (auto consumer : consumers) {
