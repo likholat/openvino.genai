@@ -17,7 +17,10 @@ int32_t main(int32_t argc, char* argv[]) try {
     ov::Tensor mask_image = utils::load_image(mask_image_path);
 
     ov::genai::InpaintingPipeline pipe(models_path, device);
-    ov::Tensor generated_image = pipe.generate(prompt, image, mask_image, ov::genai::callback(progress_bar));
+    ov::Tensor generated_image;
+    for (size_t i = 0; i < 50; ++i) {
+        generated_image = pipe.generate(prompt, image, mask_image, ov::genai::callback(progress_bar));
+    }
 
     // writes `num_images_per_prompt` images by pattern name
     imwrite("image_%d.bmp", generated_image, true);
