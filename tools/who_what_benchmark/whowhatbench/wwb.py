@@ -179,7 +179,7 @@ def parse_args():
         type=str,
         nargs='*',
         default=None,
-        help="LoRA adapters.",
+        help="LoRA adapters. Supported for Text Generation and Image Generation pipelines.",
     )
     parser.add_argument(
         "--alphas",
