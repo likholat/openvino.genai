@@ -139,14 +139,15 @@ AutoencoderKLLTXVideo& AutoencoderKLLTXVideo::compile(const std::string& device,
     return *this;
 }
 
-AutoencoderKLLTXVideo& AutoencoderKLLTXVideo::reshape(int64_t batch_size, int64_t num_frames, int64_t height, int64_t width) {
+AutoencoderKLLTXVideo& AutoencoderKLLTXVideo::reshape(int64_t batch_size,
+                                                      int64_t num_frames,
+                                                      int64_t height,
+                                                      int64_t width) {
     OPENVINO_ASSERT(m_decoder_model, "Model has been already compiled. Cannot reshape already compiled model");
-
-    const size_t vae_scale_factor = get_vae_scale_factor();
-
-    OPENVINO_ASSERT((height % vae_scale_factor == 0 || height < 0) &&
-            (width % vae_scale_factor == 0 || width < 0), "Both 'width' and 'height' must be divisible by ",
-            vae_scale_factor);
+    OPENVINO_ASSERT(height > 0, "Height must be positive");
+    OPENVINO_ASSERT(height % 32 == 0, "Height have to be divisible by 32 but got ", height);
+    OPENVINO_ASSERT(width > 0, "Width must be positive");
+    OPENVINO_ASSERT(width % 32 == 0, "Width have to be divisible by 32 but got ", width);
 
     // TODO: for img2video
     // if (m_encoder_model) {
@@ -155,15 +156,20 @@ AutoencoderKLLTXVideo& AutoencoderKLLTXVideo::reshape(int64_t batch_size, int64_
     //     m_encoder_model->reshape(idx_to_shape);
     // }
 
-    int64_t spatial_compression_ratio = m_patch_size * std::pow(2, std::reduce(get_config().spatio_temporal_scaling.begin(), get_config().spatio_temporal_scaling.end(), 0));
-    int64_t temporal_compression_ratio = m_patch_size_t * std::pow(2, std::reduce(get_config().spatio_temporal_scaling.begin(), get_config().spatio_temporal_scaling.end(), 0));
+    int64_t spatial_compression_ratio =
+        get_config().patch_size *
+        std::pow(
+            2,
+            std::reduce(get_config().spatio_temporal_scaling.begin(), get_config().spatio_temporal_scaling.end(), 0));
+    int64_t temporal_compression_ratio =
+        get_config().patch_size_t *
+        std::pow(
+            2,
+            std::reduce(get_config().spatio_temporal_scaling.begin(), get_config().spatio_temporal_scaling.end(), 0));
 
     num_frames = ((num_frames - 1) / temporal_compression_ratio + 1) / m_patch_size_t;
-    height /=  (spatial_compression_ratio * m_patch_size);
-    width /=  (spatial_compression_ratio * m_patch_size);
-
-    // height /= vae_scale_factor;
-    // width /= vae_scale_factor;
+    height /= (spatial_compression_ratio * m_patch_size);
+    width /= (spatial_compression_ratio * m_patch_size);
 
     ov::PartialShape input_shape = m_decoder_model->input(0).get_partial_shape();
     std::map<size_t, ov::PartialShape> idx_to_shape{{0, {batch_size, input_shape[1], num_frames, height, width}}};
